@@ -20,6 +20,24 @@ def discontinuity(points: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return np.where(mask & (z > 0), out / np.maximum(z, 1e-12), 0).astype(np.float32)
 
 
+def top_tears(d: np.ndarray, k: int = 20, radius: int = 8) -> list[tuple[int, int, float]]:
+    """The k strongest local maxima of the discontinuity map, at least `radius` px apart.
+    Returns (col, row, value) in pixel indices."""
+    # Greedy non-maximum suppression: keep the strongest pixel, drop anything within `radius` of a kept
+    # one, repeat. Unlike local-maximum picking this also spreads markers along a long straight tear.
+    flat = d.ravel()
+    cand = np.flatnonzero(flat > 0)
+    cand = cand[np.argsort(-flat[cand], kind="stable")][:20_000]  # ponytail: cap keeps the loop fast
+    kept: list[tuple[int, int, float]] = []
+    for i in cand:
+        r, c = divmod(int(i), d.shape[1])
+        if all((r - kr) ** 2 + (c - kc) ** 2 > radius**2 for kc, kr, _ in kept):
+            kept.append((int(c), int(r), float(d[r, c])))
+            if len(kept) == k:
+                break
+    return kept
+
+
 if __name__ == "__main__":
     # A plane at z=1 with a step to z=2 on the right half: the tear sits exactly on the step.
     h, w = 8, 8

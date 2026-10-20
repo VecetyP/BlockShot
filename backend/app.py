@@ -79,15 +79,51 @@ def map_png(rid: str, kind: str):
         buf = io.BytesIO()
         Image.fromarray(rgb).save(buf, format="PNG")
         return Response(buf.getvalue(), media_type="image/png")
-    x = store.map_array(rid, kind) if kind in ("depth", "confidence", "discontinuity") else None
+    x = store.map_array(rid, kind) if kind in ("depth", "confidence", "discontinuity", "curl", "residual") else None
     if x is None:
         raise HTTPException(404, f"no {kind} map for {rid}")
     # Display normalization only; stored arrays stay raw.
     x, mask = x.astype(np.float32), store.load_arrays(rid)["mask"]
-    vals = x[mask] if mask.any() else x.ravel()
-    lo, hi = np.percentile(vals, [1, 99]) if vals.size else (0.0, 1.0)
+    if kind in ("curl", "residual"):
+        # Already relative to the RMS gradient: fixed scale, so ~0 shows as 0 and runs compare directly.
+        x, (lo, hi) = np.abs(x), (0.0, 1.0)
+    else:
+        vals = x[mask] if mask.any() else x.ravel()
+        lo, hi = np.percentile(vals, [1, 99]) if vals.size else (0.0, 1.0)
     img = np.clip((x - lo) / max(hi - lo, 1e-12), 0, 1)
     img = np.where(mask, (img * 255).astype(np.uint8), 0)
     buf = io.BytesIO()
     Image.fromarray(img.astype(np.uint8)).save(buf, format="PNG")
     return Response(buf.getvalue(), media_type="image/png")
+
+
+@app.get("/runs/{rid}/analysis")
+def analysis(rid: str, force: bool = False):
+    _run_or_404(rid)
+    return store.analysis(rid, force)
+
+
+@app.get("/runs/{rid}/field/{kind}.bin")
+def field(rid: str, kind: str, stride: int | None = None):
+    """float32 per point, same order as points.bin."""
+    _run_or_404(rid)
+    b = store.field_bin(rid, kind, stride) if kind in ("curl", "residual") else None
+    if b is None:
+        raise HTTPException(404, f"no {kind} field for {rid}")
+    return Response(b, media_type="application/octet-stream")
+
+
+@app.post("/runs/{rid}/offaxis")
+def offaxis(rid: str):
+    _run_or_404(rid)
+    if not store.has_depth(store.load_meta(rid)):
+        raise HTTPException(400, "run has no depth to re-render")
+    return [f"/runs/{rid}/offaxis/{n}" for n in store.offaxis_renders(rid)]
+
+
+@app.get("/runs/{rid}/offaxis/{name}")
+def offaxis_png(rid: str, name: str):
+    path = (store.RUNS / rid / "offaxis" / name).resolve()
+    if not path.is_relative_to(store.RUNS.resolve()) or path.parent.name != "offaxis" or not path.is_file():
+        raise HTTPException(404)
+    return Response(path.read_bytes(), media_type="image/png")

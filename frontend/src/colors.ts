@@ -1,6 +1,7 @@
 import type { Cloud } from "./api";
 
-export const COLOR_MODES = ["rgb", "depth", "confidence", "discontinuity"] as const;
+export const COLOR_MODES = ["rgb", "depth", "confidence", "discontinuity", "curl", "residual"] as const;
+export const FIELD_MODES: readonly ColorMode[] = ["curl", "residual"]; // fetched per run on demand
 export type ColorMode = (typeof COLOR_MODES)[number];
 
 // Polynomial fit of Google's Turbo colormap, x in [0, 1].
@@ -16,9 +17,14 @@ function percentile(v: Float32Array, p: number) {
 }
 
 /** Display-only normalization; the cloud's raw values are never modified. */
-export function colorize(cloud: Cloud, mode: ColorMode): Float32Array {
+export function colorize(cloud: Cloud, mode: ColorMode, field?: Float32Array | null): Float32Array {
   const out = new Float32Array(cloud.n * 3);
-  if (mode === "rgb" || (mode === "confidence" && !cloud.confidence)) {
+  if (mode === "curl" && field) {
+    // Signed, relative to the run's RMS gradient, on a fixed ±1 range: green is zero curl, red/blue the two senses.
+    for (let i = 0; i < cloud.n; i++) turbo(Math.min(1, Math.max(0, (field[i] + 1) / 2)), out, 3 * i);
+    return out;
+  }
+  if (mode === "rgb" || (mode === "confidence" && !cloud.confidence) || ((mode === "curl" || mode === "residual") && !field)) {
     for (let i = 0; i < out.length; i++) out[i] = cloud.rgb[i] / 255;
     return out;
   }
@@ -26,9 +32,9 @@ export function colorize(cloud: Cloud, mode: ColorMode): Float32Array {
   if (mode === "depth") {
     v = new Float32Array(cloud.n);
     for (let i = 0; i < cloud.n; i++) v[i] = cloud.xyz[3 * i + 2];
-  } else v = mode === "confidence" ? cloud.confidence! : cloud.discontinuity;
-  const lo = mode === "confidence" ? 0 : percentile(v, 0.01);
-  const hi = mode === "confidence" ? 1 : percentile(v, 0.99);
+  } else v = mode === "confidence" ? cloud.confidence! : mode === "residual" ? field! : cloud.discontinuity;
+  const lo = mode === "confidence" || mode === "residual" ? 0 : percentile(v, 0.01);
+  const hi = mode === "confidence" || mode === "residual" ? 1 : percentile(v, 0.99); // residual: fixed, relative units
   const span = Math.max(hi - lo, 1e-12);
   for (let i = 0; i < cloud.n; i++) turbo(Math.min(1, Math.max(0, (v[i] - lo) / span)), out, 3 * i);
   return out;

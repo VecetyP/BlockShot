@@ -2,10 +2,19 @@ import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import type { Cloud, RunMeta } from "./api";
+import type { Cloud, RunMeta, Tear } from "./api";
 import { colorize, type ColorMode } from "./colors";
 
-type Props = { cloud: Cloud; meta: RunMeta; mode: ColorMode; pointSize: number; snapKey: number; sync?: OrbitSync };
+type Props = {
+  cloud: Cloud;
+  meta: RunMeta;
+  mode: ColorMode;
+  field?: Float32Array | null; // per-point curl/residual, same order as the cloud
+  tears?: Tear[];
+  pointSize: number;
+  snapKey: number;
+  sync?: OrbitSync;
+};
 
 /**
  * Shares one orbit between viewers. Poses are exchanged in units of each cloud's median depth, so
@@ -68,7 +77,7 @@ function zStats(cloud: Cloud) {
   return { min: z[0] ?? 1, median: z[z.length >> 1] ?? 1, max: z[z.length - 1] ?? 1 };
 }
 
-function Points({ cloud, mode, pointSize }: Pick<Props, "cloud" | "mode" | "pointSize">) {
+function Points({ cloud, mode, field, pointSize }: Pick<Props, "cloud" | "mode" | "field" | "pointSize">) {
   // OpenCV camera frame -> three.js camera frame: flip Y and Z.
   const positions = useMemo(() => {
     const p = new Float32Array(cloud.xyz.length);
@@ -83,13 +92,29 @@ function Points({ cloud, mode, pointSize }: Pick<Props, "cloud" | "mode" | "poin
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    g.setAttribute("color", new THREE.BufferAttribute(colorize(cloud, mode), 3));
+    g.setAttribute("color", new THREE.BufferAttribute(colorize(cloud, mode, field), 3));
     return g;
-  }, [positions, cloud, mode]);
+  }, [positions, cloud, mode, field]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <points frustumCulled={false} geometry={geometry}>
       <pointsMaterial vertexColors size={pointSize} sizeAttenuation={false} />
+    </points>
+  );
+}
+
+/** Tear locations as large markers drawn over the cloud (no depth test, so they're never hidden). */
+function TearMarkers({ tears }: { tears: Tear[] }) {
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    const p = new Float32Array(tears.flatMap((t) => [t.xyz[0], -t.xyz[1], -t.xyz[2]]));
+    g.setAttribute("position", new THREE.BufferAttribute(p, 3));
+    return g;
+  }, [tears]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <points geometry={geometry} renderOrder={1} frustumCulled={false}>
+      <pointsMaterial color="#ff2bd6" size={9} sizeAttenuation={false} depthTest={false} transparent />
     </points>
   );
 }
@@ -132,14 +157,15 @@ function Snap({ target, snapKey }: { target: number; snapKey: number }) {
   return null;
 }
 
-export default function Viewer({ cloud, meta, mode, pointSize, snapKey, sync }: Props) {
+export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
     <Canvas className="viewer" linear flat gl={{ antialias: false, preserveDrawingBuffer: true }} dpr={1}>
       <color attach="background" args={["#111317"]} />
       <IntrinsicsProjection meta={meta} near={z.min * 0.01} far={z.max * 100} />
-      <Points cloud={cloud} mode={mode} pointSize={pointSize} />
+      <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />
+      {tears && tears.length > 0 && <TearMarkers tears={tears} />}
       <OrbitControls makeDefault enableDamping={false} />
       {sync && <SyncControls sync={sync} scale={z.median} />}
       <Snap target={z.median} snapKey={snapKey} />

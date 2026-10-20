@@ -67,3 +67,13 @@ main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; min-heigh
 .strip figure { margin: 0; flex: none; }
 .strip img { height: 120px; display: block; border-radius: 4px; background: #fff; image-rendering: pixelated; }
 .strip figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.stats { margin-left: 4px; }
+.warn { color: #ffb36b; }
+.marked { position: relative; }
+.tear {
+  position: absolute; transform: translate(-50%, -50%); min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 8px; background: #ff2bd6; color: #fff; font: 600 10px/16px system-ui; text-align: center;
+  box-shadow: 0 0 0 1px #000;
+}
+.tear-list { margin: 0; padding: 0 0 0 26px; font-size: 12px; columns: 2; column-gap: 18px; flex: none; font-variant-numeric: tabular-nums; }
+.offaxis { align-self: center; flex: none; }

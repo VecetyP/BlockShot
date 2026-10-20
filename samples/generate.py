@@ -8,7 +8,8 @@ OUT = Path(__file__).parent
 SIZE = 768
 
 
-def penrose_triangle(path: Path, w: float = 0.3) -> None:
+def penrose_strips(w: float = 0.3, size: int = SIZE) -> list[list[tuple[float, float]]]:
+    """The three face strips of a Penrose tribar, as pixel-coordinate polygons in a size x size image."""
     # Edges 0=bottom, 1=right, 2=left of an upward triangle centered at the origin with inradius 1.
     # Each edge has three parallel lines at depth 0 (outer), w (mid), 2w (inner). Every vertex of
     # the figure is the intersection of two such lines; each face strip joins one bar's outer band
@@ -34,12 +35,15 @@ def penrose_triangle(path: Path, w: float = 0.3) -> None:
             meet(line(l, M), line(r, M)),
         ])
 
+    s = size * 0.22
+    return [[(size / 2 + p[0] * s, size * 0.58 - p[1] * s) for p in poly] for poly in strips]
+
+
+def penrose_triangle(path: Path) -> None:
     img = Image.new("RGB", (SIZE, SIZE), "white")
     dr = ImageDraw.Draw(img)
-    s = SIZE * 0.22
-    to_px = lambda p: (SIZE / 2 + p[0] * s, SIZE * 0.58 - p[1] * s)
-    for poly, shade in zip(strips, [(90, 90, 90), (170, 170, 170), (230, 230, 230)]):
-        dr.polygon([to_px(p) for p in poly], fill=shade, outline="black", width=3)
+    for poly, shade in zip(penrose_strips(), [(90, 90, 90), (170, 170, 170), (230, 230, 230)]):
+        dr.polygon(poly, fill=shade, outline="black", width=3)
     img.save(path)
 
 

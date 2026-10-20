@@ -1,38 +1,78 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "./api";
-import { COLOR_MODES, type ColorMode } from "./colors";
+import { COLOR_MODES, FIELD_MODES, type ColorMode } from "./colors";
 import Viewer, { OrbitSync } from "./Viewer";
 
 const MAX_PANELS = 4;
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
 
-function Panel(props: { id: string; mode: ColorMode; pointSize: number; snapKey: number; sync?: OrbitSync; titled: boolean }) {
+const pct = (x?: number) => (x === undefined ? "–" : `${(100 * x).toFixed(1)}%`);
+
+function Panel(props: {
+  id: string;
+  mode: ColorMode;
+  pointSize: number;
+  snapKey: number;
+  sync?: OrbitSync;
+  titled: boolean;
+  showTears: boolean;
+}) {
   const [meta, setMeta] = useState<api.RunMeta | null>(null);
   const [cloud, setCloud] = useState<api.Cloud | null>(null);
+  const [analysis, setAnalysis] = useState<api.Analysis | null>(null);
+  const [field, setField] = useState<{ kind: string; values: Float32Array | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [localSnap, setLocalSnap] = useState(0);
 
   useEffect(() => {
     setCloud(null);
     setError(null);
+    setAnalysis(null);
+    setField(null);
     Promise.all([api.getRun(props.id), api.getCloud(props.id)])
       .then(([m, c]) => { setMeta(m); setCloud(c); })
       .catch((e) => setError(String(e)));
+    api.getAnalysis(props.id).then(setAnalysis).catch(() => {});
   }, [props.id]);
+
+  const wantsField = FIELD_MODES.includes(props.mode);
+  useEffect(() => {
+    if (!wantsField || field?.kind === props.mode) return;
+    api.getField(props.id, props.mode).then((values) => setField({ kind: props.mode, values }));
+  }, [props.id, props.mode, wantsField, field?.kind]);
+
+  const unavailable =
+    (props.mode === "confidence" && !cloud?.confidence) || (wantsField && field?.kind === props.mode && !field.values);
+  const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
+  const integ = analysis?.integrability;
 
   return (
     <div className="panel">
-      {props.titled && meta && (
+      {meta && (
         <div className="panel-head">
-          <span>{modelLabel(meta)} <small>{meta.scale_kind}</small></span>
-          <button onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>
+          <span>
+            {props.titled && <>{modelLabel(meta)} <small>{meta.scale_kind}</small> </>}
+            {analysis && (
+              <small className="stats">
+                {[
+                  analysis.reprojection_px !== null && `reproj ${analysis.reprojection_px.toFixed(3)} px`,
+                  integ?.native && `native residual ${pct(integ.native.residual_fraction)}`,
+                  integ?.derived && `depth residual ${pct(integ.derived.residual_fraction)}`,
+                ].filter(Boolean).join(" · ")}
+              </small>
+            )}
+            {unavailable && <small className="warn"> · no {props.mode} for this model</small>}
+          </span>
+          {props.titled && <button onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>}
         </div>
       )}
       {cloud && meta ? (
         <Viewer
           cloud={cloud}
           meta={meta}
-          mode={props.mode === "confidence" && !cloud.confidence ? "rgb" : props.mode}
+          mode={shownMode}
+          field={field?.kind === props.mode ? field.values : null}
+          tears={props.showTears ? analysis?.tears : undefined}
           pointSize={props.pointSize}
           snapKey={props.snapKey + localSnap}
           sync={props.sync}
@@ -44,7 +84,15 @@ function Panel(props: { id: string; mode: ColorMode; pointSize: number; snapKey:
   );
 }
 
-function Strip({ run }: { run: api.RunMeta }) {
+function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
+  const [tears, setTears] = useState<api.Tear[]>([]);
+  const [offAxis, setOffAxis] = useState<string[] | null>(null);
+  const [rendering, setRendering] = useState(false);
+  useEffect(() => {
+    setOffAxis(null);
+    api.getAnalysis(run.id).then((a) => setTears(a.tears)).catch(() => setTears([]));
+  }, [run.id]);
+
   // Normal-only models store a placeholder plane; its depth and discontinuity maps are meaningless.
   const hasDepth = !String(run.depth_source ?? "").startsWith("none");
   const maps = [
@@ -52,13 +100,45 @@ function Strip({ run }: { run: api.RunMeta }) {
     ...(run.has_confidence ? ["confidence"] : []),
     ...(run.has_normals ? ["normals"] : []),
     ...(hasDepth ? ["discontinuity"] : []),
+    ...(run.has_normals || hasDepth ? ["curl", "residual"] : []),
   ];
+  const renderOffAxis = () => {
+    setRendering(true);
+    api.renderOffAxis(run.id).then(setOffAxis).finally(() => setRendering(false));
+  };
   return (
     <div className="strip">
-      <figure><img src={api.inputUrl(run.id)} alt="input" /><figcaption>{modelLabel(run)} · input</figcaption></figure>
+      <figure className="with-tears">
+        <div className="marked">
+          <img src={api.inputUrl(run.id)} alt="input" />
+          {showTears &&
+            tears.map((t, i) => (
+              <span key={i} className="tear" style={{ left: `${(100 * (t.u + 0.5)) / run.width}%`, top: `${(100 * (t.v + 0.5)) / run.height}%` }}>
+                {i + 1}
+              </span>
+            ))}
+        </div>
+        <figcaption>{modelLabel(run)} · input</figcaption>
+      </figure>
       {maps.map((k) => (
         <figure key={k}><img src={api.mapUrl(run.id, k)} alt={k} /><figcaption>{k}</figcaption></figure>
       ))}
+      {showTears && tears.length > 0 && (
+        <ol className="tear-list" aria-label="Top tears by pixel">
+          {tears.map((t, i) => <li key={i}>({t.u}, {t.v}) <small>{t.score.toPrecision(3)}</small></li>)}
+        </ol>
+      )}
+      {hasDepth && (
+        offAxis ? (
+          offAxis.map((u) => (
+            <figure key={u}><img src={u} alt="" /><figcaption>{u.match(/yaw_([+-]\d+)/)?.[1]}°</figcaption></figure>
+          ))
+        ) : (
+          <button className="offaxis" onClick={renderOffAxis} disabled={rendering}>
+            {rendering ? "Rendering…" : "Off-axis renders"}
+          </button>
+        )
+      )}
     </div>
   );
 }
@@ -75,6 +155,7 @@ export default function App() {
   const [mode, setMode] = useState<ColorMode>("rgb");
   const [pointSize, setPointSize] = useState(2);
   const [snapKey, setSnapKey] = useState(0);
+  const [showTears, setShowTears] = useState(false);
   // A fresh sync object per selection, so panels from an old grid don't keep listening.
   const sync = useMemo(() => new OrbitSync(), [selected.join()]);
 
@@ -183,6 +264,10 @@ export default function App() {
             {pointSize}px
           </label>
           <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
+          <label className="size">
+            <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
+            Tears
+          </label>
         </div>
 
         <div className={`stage grid-${selected.length}`}>
@@ -196,6 +281,7 @@ export default function App() {
                 snapKey={snapKey}
                 sync={selected.length > 1 ? sync : undefined}
                 titled={selected.length > 1}
+                showTears={showTears}
               />
             ))
           ) : (
@@ -205,7 +291,7 @@ export default function App() {
 
         {selectedRuns.length > 0 && (
           <div className="strips">
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} />)}
+            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} />)}
           </div>
         )}
       </main>

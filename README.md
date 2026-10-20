@@ -35,6 +35,39 @@ Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.np
 `points.ply` (RGB-colored, camera frame: +X right, +Y down, +Z forward), `input.png` and
 `meta.json`. Re-running the same image and model hits the cache; pass `--force` to recompute.
 
+## Analysis
+
+Computed on first request per run and cached in `runs/<id>/analysis.json` (+ `analysis.npz`).
+`GET /runs/{id}/analysis` returns the summary; each panel shows it in its header.
+
+- **Integrability** (`backend/analysis/integrability.py`), the core research signal. For each run it
+  builds a gradient field of log-depth twice: *native* from the model's normals, *derived* from its
+  depth. It then computes the curl and a Helmholtz–Hodge split: a Poisson solve with Neumann
+  boundaries over the mask, via `scipy.sparse`. It reports the non-integrable residual energy as a
+  fraction of the total.
+  - Deviation from the plan: the native gradient uses the perspective-exact
+    `∇log z = −(n_x, n_y)/(n·r)` (r = the pixel's ray) rather than the orthographic `−n_x/n_z`. Only
+    the former is curl-free for every real surface under a perspective camera; near the optical axis
+    they agree.
+  - Depth-derived gradients are integrable by construction: their residual is 0 to solver precision.
+  - Curl and residual maps are stored relative to the run's RMS gradient and shown on a fixed scale,
+    so ~0 really looks like 0 and runs compare directly. Viewer modes: **curl** (signed) and
+    **residual**.
+  - Tests: an exact perspective sphere gives 0.05% residual. The hand-built Penrose normal field
+    (`tests/fixtures/fields.py`) gives 22%, spread over all three bars of the loop (33 / 27 / 40%),
+    even though every local join is a valid fold.
+- **Reprojection** (`reproject.py`): mean px error of points projected through the run's intrinsics.
+  It is 0.000 px for every depth model.
+- **Discontinuity / tears** (`discontinuity.py`): the largest 3D distance to a 4-neighbor divided by
+  depth, plus the top 20 tears found by greedy non-max suppression (8 px). The **Tears** toggle marks
+  them in 3D and on the input, and lists their pixel coordinates.
+- **Off-axis renders** (`offaxis.py`): the cloud re-rendered through the same intrinsics after
+  rotating it ±5°, ±15° and ±30° about the vertical axis through its centroid. Saved to
+  `runs/<id>/offaxis/yaw_±NN.png` (`POST /runs/{id}/offaxis`, or the button in the strip).
+
+First numbers on `samples/penrose_triangle.png`: MoGe-3 normals leave 6.0% non-integrable and
+Marigold normals 11.1%. Depth Anything, VGGT and MoGe depth all give 0% (as they must).
+
 ## API
 
 | Route | |
@@ -44,7 +77,10 @@ Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.np
 | `POST /predict` | multipart `image`, `models` (repeatable), `force` |
 | `GET /runs`, `GET /runs/{id}` | run metadata |
 | `GET /runs/{id}/points.bin?stride=` | `uint32 N, has_conf`, `f32 xyz[3N]`, `f32 discontinuity[N]`, `f32 conf[N]` (if any), `u8 rgb[3N]`; ≤500k points |
-| `GET /runs/{id}/maps/{depth,confidence,discontinuity}.png` | display-normalized 2D maps |
+| `GET /runs/{id}/maps/{depth,confidence,normals,discontinuity,curl,residual}.png` | display-normalized 2D maps |
+| `GET /runs/{id}/analysis?force=` | reprojection, integrability, top tears |
+| `GET /runs/{id}/field/{curl,residual}.bin` | `f32[N]` per point, same order as `points.bin` |
+| `POST /runs/{id}/offaxis` | renders the ±5/15/30° views, returns their URLs |
 
 ## Models
 

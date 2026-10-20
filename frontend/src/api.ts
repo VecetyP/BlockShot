@@ -60,3 +60,25 @@ export async function getCloud(id: string): Promise<Cloud> {
 
 export const mapUrl = (id: string, kind: string) => `${API}/runs/${id}/maps/${kind}.png`;
 export const inputUrl = (id: string) => `${API}/runs/${id}/input.png`;
+
+export type Tear = { u: number; v: number; score: number; xyz: [number, number, number] };
+export type Analysis = {
+  reprojection_px: number | null;
+  integrability: Partial<Record<"native" | "derived", { residual_fraction: number; edges: number }>>;
+  tears: Tear[];
+};
+
+// Panels and strips both ask for the same run's analysis; share one request.
+const analyses = new Map<string, Promise<Analysis>>();
+export const getAnalysis = (id: string) => {
+  if (!analyses.has(id)) analyses.set(id, fetch(`${API}/runs/${id}/analysis`).then(json<Analysis>));
+  return analyses.get(id)!;
+};
+
+export const getField = async (id: string, kind: string) => {
+  const r = await fetch(`${API}/runs/${id}/field/${kind}.bin`);
+  return r.ok ? new Float32Array(await r.arrayBuffer()) : null;
+};
+
+export const renderOffAxis = (id: string) =>
+  fetch(`${API}/runs/${id}/offaxis`, { method: "POST" }).then(json<string[]>).then((u) => u.map((x) => API + x));
