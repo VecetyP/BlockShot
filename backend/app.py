@@ -70,6 +70,15 @@ def input_png(rid: str):
 @app.get("/runs/{rid}/maps/{kind}.png")
 def map_png(rid: str, kind: str):
     _run_or_404(rid)
+    if kind == "normals":
+        n = store.map_array(rid, "normals")
+        if n is None:
+            raise HTTPException(404, f"no normals for {rid}")
+        # Conventional normal-map colors: R=right, G=up, B=toward viewer (stored normals are OpenCV).
+        rgb = ((n * np.array([1, -1, -1]) + 1) * 127.5).clip(0, 255).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(rgb).save(buf, format="PNG")
+        return Response(buf.getvalue(), media_type="image/png")
     x = store.map_array(rid, kind) if kind in ("depth", "confidence", "discontinuity") else None
     if x is None:
         raise HTTPException(404, f"no {kind} map for {rid}")

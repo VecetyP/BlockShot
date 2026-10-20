@@ -8,6 +8,9 @@ from ..device import DEVICE
 # name -> (module, class). Imported lazily so one broken model install doesn't break the rest.
 MODELS = {
     "depth_anything": ("depth_anything", "DepthAnythingV2"),
+    "moge": ("moge", "MoGe"),
+    "marigold_normals": ("marigold_normals", "MarigoldNormals"),
+    "vggt": ("vggt", "VGGT"),
 }
 
 _loaded: dict = {}
@@ -31,9 +34,15 @@ def status() -> list[dict]:
     ]
 
 
-def unload(name: str | None = None) -> None:
-    for n in [name] if name else list(_loaded):
-        _loaded.pop(n, None)
+def free_cache() -> None:
+    """Return cached activation memory to the driver. Without this, each resident model keeps its peak
+    activations reserved, and on Windows the overflow spills into shared system RAM (100x slower)."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def unload(name: str | None = None) -> None:
+    for n in [name] if name else list(_loaded):
+        _loaded.pop(n, None)
+    free_cache()

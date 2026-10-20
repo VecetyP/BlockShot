@@ -35,7 +35,10 @@ def predict_cached(data: bytes, model: str, force: bool = False, source: str | N
     if not force and (d / "meta.json").exists():
         return rid, load_meta(rid), True
     image = decode_image(data)
-    pred = registry.get(model).predict(image)
+    try:
+        pred = registry.get(model).predict(image)
+    finally:
+        registry.free_cache()
     meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source)
     return rid, meta, False
 

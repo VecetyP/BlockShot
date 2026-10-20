@@ -5,7 +5,60 @@ import * as THREE from "three";
 import type { Cloud, RunMeta } from "./api";
 import { colorize, type ColorMode } from "./colors";
 
-type Props = { cloud: Cloud; meta: RunMeta; mode: ColorMode; pointSize: number; snapKey: number };
+type Props = { cloud: Cloud; meta: RunMeta; mode: ColorMode; pointSize: number; snapKey: number; sync?: OrbitSync };
+
+/**
+ * Shares one orbit between viewers. Poses are exchanged in units of each cloud's median depth, so
+ * models with different scales (metric vs affine-invariant) stay visually aligned, and the snapped
+ * pose (camera at origin, target at depth 1) is the snapped pose for every panel.
+ */
+export type Pose = { position: THREE.Vector3; target: THREE.Vector3; quaternion: THREE.Quaternion };
+export class OrbitSync {
+  private listeners = new Set<(p: Pose, src: object) => void>();
+  subscribe(fn: (p: Pose, src: object) => void) {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  }
+  publish(p: Pose, src: object) {
+    this.listeners.forEach((fn) => fn(p, src));
+  }
+}
+
+type Controls = THREE.EventDispatcher<{ change: object }> & { target: THREE.Vector3; update(): void };
+
+function SyncControls({ sync, scale }: { sync: OrbitSync; scale: number }) {
+  const { camera, controls } = useThree() as unknown as { camera: THREE.Camera; controls: Controls | null };
+  useEffect(() => {
+    if (!controls) return;
+    let applying = false;
+    const onChange = () => {
+      if (applying) return;
+      sync.publish(
+        {
+          position: camera.position.clone().divideScalar(scale),
+          target: controls.target.clone().divideScalar(scale),
+          quaternion: camera.quaternion.clone(),
+        },
+        controls,
+      );
+    };
+    const unsub = sync.subscribe((p, src) => {
+      if (src === controls) return;
+      applying = true;
+      camera.position.copy(p.position).multiplyScalar(scale);
+      controls.target.copy(p.target).multiplyScalar(scale);
+      camera.quaternion.copy(p.quaternion);
+      controls.update();
+      applying = false;
+    });
+    controls.addEventListener("change", onChange);
+    return () => {
+      unsub();
+      controls.removeEventListener("change", onChange);
+    };
+  }, [sync, scale, camera, controls]);
+  return null;
+}
 
 /** Depth range of the cloud, used for clip planes and the orbit target. */
 function zStats(cloud: Cloud) {
@@ -67,18 +120,19 @@ function IntrinsicsProjection({ meta, near, far }: { meta: RunMeta; near: number
 }
 
 function Snap({ target, snapKey }: { target: number; snapKey: number }) {
-  const { camera, controls } = useThree() as { camera: THREE.Camera; controls: { target: THREE.Vector3; update(): void } | null };
+  const { camera, controls } = useThree() as unknown as { camera: THREE.Camera; controls: Controls | null };
   useEffect(() => {
     if (!controls) return;
     camera.position.set(0, 0, 0);
     camera.up.set(0, 1, 0);
     controls.target.set(0, 0, -target);
     controls.update(); // looks from the origin straight down -Z (= +Z in OpenCV): identity rotation
+    controls.dispatchEvent({ type: "change" }); // update() alone doesn't fire when nothing moved
   }, [camera, controls, target, snapKey]);
   return null;
 }
 
-export default function Viewer({ cloud, meta, mode, pointSize, snapKey }: Props) {
+export default function Viewer({ cloud, meta, mode, pointSize, snapKey, sync }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
@@ -87,6 +141,7 @@ export default function Viewer({ cloud, meta, mode, pointSize, snapKey }: Props)
       <IntrinsicsProjection meta={meta} near={z.min * 0.01} far={z.max * 100} />
       <Points cloud={cloud} mode={mode} pointSize={pointSize} />
       <OrbitControls makeDefault enableDamping={false} />
+      {sync && <SyncControls sync={sync} scale={z.median} />}
       <Snap target={z.median} snapKey={snapKey} />
     </Canvas>
   );

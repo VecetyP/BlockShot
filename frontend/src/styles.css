@@ -37,8 +37,10 @@ small { color: var(--muted); }
 .models label { display: flex; gap: 8px; align-items: baseline; }
 .error { color: #ff7a7a; margin: 0; font-size: 12px; word-break: break-word; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 8px 0 0; }
-.history { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: grid; gap: 4px; }
-.history button { display: flex; gap: 10px; width: 100%; text-align: left; align-items: center; padding: 6px; }
+.history { list-style: none; margin: 0; padding: 0; overflow-y: auto; overflow-x: hidden; display: grid; gap: 4px; }
+.history li { display: flex; gap: 6px; align-items: center; }
+.history li.active > button { border-color: var(--accent); }
+.history button { display: flex; gap: 10px; flex: 1; min-width: 0; text-align: left; align-items: center; padding: 6px; }
 .history img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #fff; flex: none; }
 .history span { display: grid; min-width: 0; }
 .history small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -48,11 +50,20 @@ main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; min-heigh
 .modes { display: flex; gap: 4px; }
 .size { display: flex; gap: 8px; align-items: center; color: var(--muted); }
 .count { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
-.stage { position: relative; min-height: 0; }
+.stage { display: grid; gap: 2px; min-height: 0; background: var(--line); }
+.stage.grid-2 { grid-template-columns: 1fr 1fr; }
+.stage.grid-3, .stage.grid-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.panel { position: relative; min-height: 0; min-width: 0; background: var(--bg); }
+.panel-head {
+  position: absolute; z-index: 1; top: 8px; left: 8px; right: 8px; display: flex;
+  justify-content: space-between; align-items: center; pointer-events: none;
+}
+.panel-head > * { pointer-events: auto; background: rgb(21 23 28 / 0.85); padding: 4px 8px; border-radius: 6px; }
 .viewer { position: absolute !important; inset: 0; }
 .empty { color: var(--muted); text-align: center; margin-top: 30vh; }
 
-.strip { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); overflow-x: auto; }
+.strips { max-height: 34vh; overflow-y: auto; border-top: 1px solid var(--line); }
+.strip { display: flex; gap: 8px; padding: 8px 14px; overflow-x: auto; }
 .strip figure { margin: 0; flex: none; }
-.strip img { height: 140px; display: block; border-radius: 4px; background: #fff; image-rendering: pixelated; }
+.strip img { height: 120px; display: block; border-radius: 4px; background: #fff; image-rendering: pixelated; }
 .strip figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
