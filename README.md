@@ -15,6 +15,11 @@ uv run python samples/generate.py   # draws penrose_triangle.png, necker_cube.pn
 
 ## Use
 
+On Windows, double-click **`run.bat`**. It starts the backend (:8000) and the viewer (:5173), each in
+its own window, and opens http://localhost:5173. Close the two windows to stop the servers.
+
+Manually:
+
 ```bash
 uv run python -m backend.cli predict samples/penrose_triangle.png --model depth_anything
 uv run uvicorn backend.app:app --port 8000
