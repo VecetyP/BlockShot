@@ -57,5 +57,6 @@ def necker_cube(path: Path) -> None:
 
 
 if __name__ == "__main__":
-    penrose_triangle(OUT / "penrose_triangle.png")
-    necker_cube(OUT / "necker_cube.png")
+    for draw, name in ((penrose_triangle, "penrose_triangle.png"), (necker_cube, "necker_cube.png")):
+        if not (OUT / name).exists():  # never overwrite a sample someone dropped in
+            draw(OUT / name)
