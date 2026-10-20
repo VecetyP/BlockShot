@@ -21,6 +21,16 @@ uv run uvicorn backend.app:app --port 8000
 uv run pytest
 ```
 
+Viewer (needs Node and pnpm; `corepack pnpm` works without a global install):
+
+```bash
+cd frontend && corepack pnpm install && corepack pnpm dev   # http://localhost:5173, proxies /api to :8000
+```
+
+The viewer renders with a projection built from the run's intrinsics, so **Snap to input camera**
+(camera at the origin looking down +Z) reproduces the input image pixel-for-pixel. Color modes:
+RGB, depth, confidence (when the model has it), discontinuity.
+
 Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.npz`,
 `points.ply` (RGB-colored, camera frame: +X right, +Y down, +Z forward), `input.png` and
 `meta.json`. Re-running the same image and model hits the cache; pass `--force` to recompute.
@@ -33,8 +43,8 @@ Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.np
 | `POST /models/unload?name=` | free a model (or all) |
 | `POST /predict` | multipart `image`, `models` (repeatable), `force` |
 | `GET /runs`, `GET /runs/{id}` | run metadata |
-| `GET /runs/{id}/points.bin?stride=` | `uint32 N`, `float32 xyz[N*3]`, `uint8 rgb[N*3]`, ≤500k points |
-| `GET /runs/{id}/maps/{depth,confidence}.png` | display-normalized 2D maps |
+| `GET /runs/{id}/points.bin?stride=` | `uint32 N, has_conf`, `f32 xyz[3N]`, `f32 discontinuity[N]`, `f32 conf[N]` (if any), `u8 rgb[3N]`; ≤500k points |
+| `GET /runs/{id}/maps/{depth,confidence,discontinuity}.png` | display-normalized 2D maps |
 
 ## Models
 

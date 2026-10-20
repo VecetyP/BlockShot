@@ -70,11 +70,11 @@ def input_png(rid: str):
 @app.get("/runs/{rid}/maps/{kind}.png")
 def map_png(rid: str, kind: str):
     _run_or_404(rid)
-    a = store.load_arrays(rid)
-    if kind not in ("depth", "confidence") or kind not in a:
+    x = store.map_array(rid, kind) if kind in ("depth", "confidence", "discontinuity") else None
+    if x is None:
         raise HTTPException(404, f"no {kind} map for {rid}")
     # Display normalization only; stored arrays stay raw.
-    x, mask = a[kind].astype(np.float32), a["mask"]
+    x, mask = x.astype(np.float32), store.load_arrays(rid)["mask"]
     vals = x[mask] if mask.any() else x.ravel()
     lo, hi = np.percentile(vals, [1, 99]) if vals.size else (0.0, 1.0)
     img = np.clip((x - lo) / max(hi - lo, 1e-12), 0, 1)

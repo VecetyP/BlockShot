@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .analysis.discontinuity import discontinuity
 from .models import registry
 from .models.base import Prediction
 
@@ -15,7 +16,10 @@ RUNS = Path(__file__).resolve().parent.parent / "runs"
 
 
 def decode_image(data: bytes) -> np.ndarray:
-    return np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
+    """RGB uint8. Transparent pixels are composited onto white (illusion drawings often ship with alpha)."""
+    im = Image.open(io.BytesIO(data)).convert("RGBA")
+    bg = Image.new("RGBA", im.size, "white")
+    return np.asarray(Image.alpha_composite(bg, im).convert("RGB"))
 
 
 def run_id(image_sha: str, model: str, version: str) -> str:
@@ -92,8 +96,17 @@ def list_runs() -> list[dict]:
 MAX_POINTS = 500_000
 
 
+def map_array(rid: str, kind: str) -> np.ndarray | None:
+    a = load_arrays(rid)
+    if kind == "discontinuity":
+        return discontinuity(a["points"], a["mask"])
+    return a[kind] if kind in a else None
+
+
 def points_bin(rid: str, stride: int | None = None) -> bytes:
-    """uint32 N, then float32 xyz (N*3), then uint8 rgb (N*3). Pixel-grid subsampling keeps structure."""
+    """Little-endian: uint32 N, uint32 has_confidence, float32 xyz[N*3], float32 discontinuity[N],
+    float32 confidence[N] (only if has_confidence), uint8 rgb[N*3].
+    Floats come first so every block stays 4-byte aligned. Pixel-grid subsampling keeps structure."""
     a = load_arrays(rid)
     pts, mask = a["points"], a["mask"]
     rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
@@ -101,6 +114,9 @@ def points_bin(rid: str, stride: int | None = None) -> bytes:
     stride = max(stride or 1, min_stride)
     sl = (slice(None, None, stride), slice(None, None, stride))
     m = mask[sl]
-    xyz = pts[sl][m].astype("<f4")
-    col = rgb[sl][m].astype(np.uint8)
-    return np.uint32(len(xyz)).tobytes() + xyz.tobytes() + col.tobytes()
+    blocks = [pts[sl][m].astype("<f4"), discontinuity(pts, mask)[sl][m].astype("<f4")]
+    if "confidence" in a:
+        blocks.append(a["confidence"][sl][m].astype("<f4"))
+    blocks.append(rgb[sl][m].astype(np.uint8))
+    header = np.array([m.sum(), "confidence" in a], "<u4")
+    return header.tobytes() + b"".join(x.tobytes() for x in blocks)
