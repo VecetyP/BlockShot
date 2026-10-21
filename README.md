@@ -78,6 +78,20 @@ Computed on first request per run and cached in `runs/<id>/analysis.json` (+ `an
 First numbers on `samples/penrose_triangle.png`: MoGe-3 normals leave 6.0% non-integrable and
 Marigold normals 11.1%. Depth Anything, VGGT and MoGe depth all give 0% (as they must).
 
+## Telephone game
+
+Select one or more runs, then press **Play** in the bar above the image strips. Each model renders
+its own point cloud **Turn** degrees to the side, has that render fed back to it as a new photo, and
+repeats **Steps** times. Rotation and mistakes both accumulate: walls bend, scenes curl into
+ribbons, and each model drifts in its own style. **Generation** scrubs every panel through the steps
+together (**Loop** animates it), and the strip shows each frame a model was fed; click one to
+enlarge it.
+
+- Only pinholes between rendered points are patched before feeding a frame back. Real gaps stay
+  grey, so the model has to cope with them.
+- Generations are ordinary cached runs tagged `meta.telephone = {root, step, yaw}`, hidden from
+  History. Replaying a chain is instant. `POST /runs/{id}/telephone?steps=&yaw=`.
+
 ## API
 
 | Route | |

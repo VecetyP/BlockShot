@@ -114,6 +114,17 @@ def field(rid: str, kind: str, stride: int | None = None):
     return Response(b, media_type="application/octet-stream")
 
 
+@app.post("/runs/{rid}/telephone")
+def telephone(rid: str, steps: int = 8, yaw: float = 15):
+    """Render the cloud `yaw` degrees to the side, feed it back into the same model, repeat `steps` times."""
+    _run_or_404(rid)
+    if not store.has_depth(store.load_meta(rid)):
+        raise HTTPException(400, "this model has no depth, so there is nothing to re-render")
+    if not (1 <= steps <= 20 and -45 <= yaw <= 45):
+        raise HTTPException(400, "steps must be 1..20 and yaw -45..45 degrees")
+    return store.telephone(rid, steps, yaw)
+
+
 @app.post("/runs/{rid}/offaxis")
 def offaxis(rid: str):
     _run_or_404(rid)
