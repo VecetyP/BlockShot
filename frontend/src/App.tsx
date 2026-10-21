@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
 import { COLOR_MODES, FIELD_MODES, type ColorMode } from "./colors";
 import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
@@ -20,8 +20,8 @@ function loadNav(): NavSettings {
 
 function Slider(props: { label: string; min: number; max: number; step: number; value: number; unit?: string; onChange: (v: number) => void }) {
   return (
-    <label className="size">
-      {props.label}
+    <label className="slider">
+      <span>{props.label}</span>
       <input
         type="range"
         min={props.min}
@@ -115,10 +115,62 @@ function Panel(props: {
   );
 }
 
+type LightboxItem = { src: string; caption: string };
+
+const Icon = ({ d }: { d: string }) => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={d} />
+  </svg>
+);
+
+/** Enlarged view of one strip image. ←/→ step through the strip, Esc or a click outside closes. */
+function Lightbox({ items, index, onIndex, onClose }: { items: LightboxItem[]; index: number; onIndex: (i: number) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+  }, []);
+  const step = useCallback((by: number) => onIndex((index + by + items.length) % items.length), [index, items.length, onIndex]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight") step(1);
+      if (e.key === "ArrowLeft") step(-1);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [step]);
+  const item = items[index];
+  return (
+    <dialog
+      ref={ref}
+      className="lightbox"
+      aria-label={item.caption}
+      onClose={onClose}
+      onClick={(e) => e.target === e.currentTarget && ref.current?.close()}
+    >
+      <figure>
+        <img src={item.src} alt={item.caption} />
+        <figcaption>
+          <span>{item.caption}</span>
+          {items.length > 1 && <span className="counter">{index + 1} / {items.length}</span>}
+        </figcaption>
+      </figure>
+      {items.length > 1 && (
+        <>
+          <button className="icon nav-prev" aria-label="Previous image" onClick={() => step(-1)}><Icon d="M15 18l-6-6 6-6" /></button>
+          <button className="icon nav-next" aria-label="Next image" onClick={() => step(1)}><Icon d="M9 18l6-6-6-6" /></button>
+        </>
+      )}
+      <button className="icon close" aria-label="Close" onClick={() => ref.current?.close()}><Icon d="M18 6L6 18M6 6l12 12" /></button>
+    </dialog>
+  );
+}
+
 function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
   const [offAxis, setOffAxis] = useState<string[] | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
   useEffect(() => {
     setOffAxis(null);
     api.getAnalysis(run.id).then((a) => setTears(a.tears)).catch(() => setTears([]));
@@ -137,23 +189,32 @@ function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
     setRendering(true);
     api.renderOffAxis(run.id).then(setOffAxis).finally(() => setRendering(false));
   };
+  const label = modelLabel(run);
+  const items: LightboxItem[] = [
+    { src: api.inputUrl(run.id), caption: `${label} · input` },
+    ...maps.map((k) => ({ src: api.mapUrl(run.id, k), caption: `${label} · ${k}` })),
+    ...(offAxis ?? []).map((u) => ({ src: u, caption: `${label} · ${u.match(/yaw_([+-]\d+)/)?.[1]}°` })),
+  ];
+  const tile = (i: number, caption: string, extra?: ReactNode) => (
+    <figure key={items[i].src} className="tile">
+      <button className="thumb" onClick={() => setOpen(i)} aria-label={`Enlarge ${items[i].caption}`}>
+        <img src={items[i].src} alt="" />
+        {extra}
+      </button>
+      <figcaption>{caption}</figcaption>
+    </figure>
+  );
   return (
     <div className="strip">
-      <figure className="with-tears">
-        <div className="marked">
-          <img src={api.inputUrl(run.id)} alt="input" />
-          {showTears &&
-            tears.map((t, i) => (
-              <span key={i} className="tear" style={{ left: `${(100 * (t.u + 0.5)) / run.width}%`, top: `${(100 * (t.v + 0.5)) / run.height}%` }}>
-                {i + 1}
-              </span>
-            ))}
-        </div>
-        <figcaption>{modelLabel(run)} · input</figcaption>
-      </figure>
-      {maps.map((k) => (
-        <figure key={k}><img src={api.mapUrl(run.id, k)} alt={k} /><figcaption>{k}</figcaption></figure>
-      ))}
+      {tile(0, `${label} · input`,
+        showTears &&
+          tears.map((t, i) => (
+            <span key={i} className="tear" style={{ left: `${(100 * (t.u + 0.5)) / run.width}%`, top: `${(100 * (t.v + 0.5)) / run.height}%` }}>
+              {i + 1}
+            </span>
+          )),
+      )}
+      {maps.map((k, i) => tile(1 + i, k))}
       {showTears && tears.length > 0 && (
         <ol className="tear-list" aria-label="Top tears by pixel">
           {tears.map((t, i) => <li key={i}>({t.u}, {t.v}) <small>{t.score.toPrecision(3)}</small></li>)}
@@ -161,15 +222,14 @@ function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
       )}
       {hasDepth && (
         offAxis ? (
-          offAxis.map((u) => (
-            <figure key={u}><img src={u} alt="" /><figcaption>{u.match(/yaw_([+-]\d+)/)?.[1]}°</figcaption></figure>
-          ))
+          offAxis.map((u, i) => tile(1 + maps.length + i, `${u.match(/yaw_([+-]\d+)/)?.[1]}°`))
         ) : (
           <button className="offaxis" onClick={renderOffAxis} disabled={rendering}>
             {rendering ? "Rendering…" : "Off-axis renders"}
           </button>
         )
       )}
+      {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
 }
@@ -232,14 +292,16 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
+        <h1 className="brand">Point Cloud Playground</h1>
         <section
           className={`drop ${file ? "has-file" : ""}`}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => { e.preventDefault(); setFile(e.dataTransfer.files[0] ?? null); }}
         >
           <label>
-            <input type="file" accept="image/*" hidden onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            {file ? file.name : "Drop an image or click to choose"}
+            <input type="file" accept="image/*" className="visually-hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <Icon d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+            <span>{file ? file.name : "Drop an image, or click to choose"}</span>
           </label>
         </section>
         <fieldset className="models">
@@ -251,7 +313,8 @@ export default function App() {
                 checked={picked.includes(m.name)}
                 onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.name] : p.filter((x) => x !== m.name)))}
               />
-              {m.name} <small>{m.scale_kind}{m.loaded ? " · loaded" : ""}</small>
+              <span className="model-name">{m.name}</span>
+              <small>{m.scale_kind}{m.loaded ? " · loaded" : ""}</small>
             </label>
           ))}
         </fieldset>
@@ -260,7 +323,10 @@ export default function App() {
         </button>
         {error && <p className="error">{error}</p>}
 
-        <h2>History <small>· tick up to {MAX_PANELS} to compare</small></h2>
+        <header className="history-head">
+          <h2>History</h2>
+          <small>Tick up to {MAX_PANELS} to compare</small>
+        </header>
         <ul className="history">
           {runs.map((r) => (
             <li key={r.id} className={selected.includes(r.id) ? "active" : ""}>
@@ -271,9 +337,9 @@ export default function App() {
                 onChange={(e) => toggle(r.id, e.target.checked)}
               />
               <button onClick={() => setSelected([r.id])}>
-                <img src={api.inputUrl(r.id)} alt="" loading="lazy" />
+                <img src={api.inputUrl(r.id)} alt="" loading="lazy" decoding="async" />
                 <span>
-                  {r.source ?? r.id}
+                  <span className="name" title={r.source ?? r.id}>{r.source ?? r.id}</span>
                   <small>{modelLabel(r)} · {r.created.replace("T", " ")}</small>
                 </span>
               </button>
@@ -284,7 +350,7 @@ export default function App() {
 
       <main>
         <div className="toolbar">
-          <div className="modes" role="radiogroup" aria-label="Color mode">
+          <div className="segmented" role="radiogroup" aria-label="Color mode">
             {COLOR_MODES.map((m) => (
               <button
                 key={m}
@@ -298,22 +364,28 @@ export default function App() {
               </button>
             ))}
           </div>
+          <span className="divider" aria-hidden="true" />
           <Slider label="Point size" min={1} max={8} step={0.5} value={pointSize} unit="px" onChange={setPointSize} />
-          <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
-          <label className="size">
-            <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
-            Tears
-          </label>
+          <span className="divider" aria-hidden="true" />
+          <div className="group">
+            <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
+            <label className="check">
+              <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
+              Tears
+            </label>
+          </div>
         </div>
         <div className="toolbar nav" aria-label="Navigation">
           <span className="hint" title="Click or hover a viewer first. In a comparison grid the panel under the mouse leads.">
-            <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster
+            <kbd>WASD</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up · <kbd>Shift</kbd> faster
           </span>
-          <Slider label="Move" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
-          <Slider label="Orbit" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
-          <Slider label="Zoom" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
-          <Slider label="Pan" min={0.1} max={3} step={0.1} value={nav.pan} onChange={(pan) => setNav({ pan })} />
-          <button onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
+          <div className="group sliders">
+            <Slider label="Move" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
+            <Slider label="Orbit" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
+            <Slider label="Zoom" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
+            <Slider label="Pan" min={0.1} max={3} step={0.1} value={nav.pan} onChange={(pan) => setNav({ pan })} />
+            <button className="quiet" onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
+          </div>
         </div>
 
         <div className={`stage grid-${selected.length}`}>
@@ -332,7 +404,7 @@ export default function App() {
               />
             ))
           ) : (
-            <p className="empty">Pick a run from the history or run a new image.</p>
+            <p className="empty">Pick a run from History, or drop in an image and press Run.</p>
           )}
         </div>
 

@@ -165,6 +165,7 @@ const SPRINT = 3;
 let keyOwner: object | null = null;
 
 const typingIn = (t: EventTarget | null) =>
+  document.querySelector("dialog[open]") !== null || // e.g. the image lightbox
   t instanceof HTMLTextAreaElement ||
   (t instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "file"].includes(t.type));
 
