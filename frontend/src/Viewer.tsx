@@ -2,7 +2,7 @@ import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import type { Cloud, RunMeta, Tear } from "./api";
+import type { BlockPreview, Cloud, RunMeta, Tear } from "./api";
 import { colorize, type ColorMode } from "./colors";
 
 type Props = {
@@ -15,6 +15,7 @@ type Props = {
   snapKey: number;
   sync?: OrbitSync;
   nav: NavSettings;
+  blocks?: BlockPreview | null; // show the Minecraft build instead of the points
 };
 
 /**
@@ -102,6 +103,43 @@ function Points({ cloud, mode, field, pointSize }: Pick<Props, "cloud" | "mode" 
       <pointsMaterial vertexColors size={pointSize} sizeAttenuation={false} />
     </points>
   );
+}
+
+// Minecraft's fixed face shading, so the build reads like it does in game: top, sides, bottom.
+// BoxGeometry face order is +x, -x, +y, -y, +z, -z; x is east/west and z north/south in both frames.
+const FACE_SHADE = [0.6, 0.6, 1.0, 0.5, 0.8, 0.8];
+
+/** The Minecraft build as real cubes (one instanced mesh), in the cloud's camera frame. */
+function Blocks({ blocks }: { blocks: BlockPreview }) {
+  const mesh = useMemo(() => {
+    const g = new THREE.BoxGeometry(1, 1, 1);
+    const shade = new Float32Array(g.attributes.position.count * 3);
+    for (let v = 0; v < g.attributes.position.count; v++) shade.fill(FACE_SHADE[Math.floor(v / 4)], 3 * v, 3 * v + 3);
+    g.setAttribute("color", new THREE.BufferAttribute(shade, 3));
+    const m = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ vertexColors: true }), blocks.n);
+    const o = new THREE.Object3D();
+    const c = new THREE.Color();
+    const s = blocks.size;
+    for (let i = 0; i < blocks.n; i++) {
+      // Block centre in Minecraft axes, then to three.js: (x, y, z)_mc -> (-x, y, -z).
+      const x = blocks.lo[0] + (blocks.ijk[3 * i] + 0.5) * s;
+      const y = blocks.lo[1] + (blocks.ijk[3 * i + 1] + 0.5) * s;
+      const z = blocks.lo[2] + (blocks.ijk[3 * i + 2] + 0.5) * s;
+      o.position.set(-x, y, -z);
+      o.scale.setScalar(s);
+      o.updateMatrix();
+      m.setMatrixAt(i, o.matrix);
+      m.setColorAt(i, c.setRGB(blocks.rgb[3 * i] / 255, blocks.rgb[3 * i + 1] / 255, blocks.rgb[3 * i + 2] / 255));
+    }
+    m.frustumCulled = false;
+    return m;
+  }, [blocks]);
+  useEffect(() => () => {
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+    mesh.dispose();
+  }, [mesh]);
+  return <primitive object={mesh} />;
 }
 
 /** Tear locations as large markers drawn over the cloud (no depth test, so they're never hidden). */
@@ -236,14 +274,14 @@ function Snap({ target, snapKey }: { target: number; snapKey: number }) {
   return null;
 }
 
-export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav }: Props) {
+export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav, blocks }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
     <Canvas className="viewer" linear flat gl={{ antialias: false, preserveDrawingBuffer: true }} dpr={1}>
       <color attach="background" args={["#111317"]} />
       <IntrinsicsProjection meta={meta} near={z.min * 0.01} far={z.max * 100} />
-      <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />
+      {blocks ? <Blocks blocks={blocks} /> : <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />}
       {tears && tears.length > 0 && <TearMarkers tears={tears} />}
       <OrbitControls makeDefault enableDamping={false} rotateSpeed={nav.rotate} zoomSpeed={nav.zoom} panSpeed={nav.pan} />
       <WasdControls speed={nav.move} scale={z.median} />

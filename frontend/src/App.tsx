@@ -47,6 +47,7 @@ function Panel(props: {
   titled: boolean;
   showTears: boolean;
   generation?: api.TelephoneStep; // telephone-game generation shown instead of the original
+  blockSize?: number; // when set, show the Minecraft build of this many blocks instead of the points
 }) {
   const [meta, setMeta] = useState<api.RunMeta | null>(null);
   const [cloud, setCloud] = useState<api.Cloud | null>(null);
@@ -54,6 +55,7 @@ function Panel(props: {
   const [field, setField] = useState<{ kind: string; values: Float32Array | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [localSnap, setLocalSnap] = useState(0);
+  const [blocks, setBlocks] = useState<{ key: string; data: api.BlockPreview | null } | null>(null);
 
   useEffect(() => {
     setCloud(null);
@@ -76,6 +78,15 @@ function Panel(props: {
     (props.mode === "confidence" && !cloud?.confidence) || (wantsField && field?.kind === props.mode && !field.values);
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
+  const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
+  const blocksKey = `${props.id}:${props.blockSize}`;
+  useEffect(() => {
+    if (!props.blockSize || !buildable || blocks?.key === blocksKey) return;
+    api.getBlocks(props.id, props.blockSize)
+      .then((data) => setBlocks({ key: blocksKey, data }))
+      .catch(() => setBlocks({ key: blocksKey, data: null }));
+  }, [props.blockSize, buildable, blocksKey, blocks?.key, props.id]);
+  const shownBlocks = props.blockSize && blocks?.key === blocksKey ? blocks.data : null;
 
   return (
     <div className="panel">
@@ -111,6 +122,7 @@ function Panel(props: {
           snapKey={props.snapKey + localSnap}
           sync={props.sync}
           nav={props.nav}
+          blocks={shownBlocks}
         />
       ) : (
         <p className="empty">{error ?? "Loading…"}</p>
@@ -170,7 +182,35 @@ function Lightbox({ items, index, onIndex, onClose }: { items: LightboxItem[]; i
   );
 }
 
-function Strip({ run, showTears, chain }: { run: api.RunMeta; showTears: boolean; chain?: api.TelephoneStep[] }) {
+/** Download a run's Minecraft build, with what to do in game so it lines up with the image. */
+function MinecraftCard({ run, size }: { run: api.RunMeta; size: number }) {
+  const [info, setInfo] = useState<api.MinecraftInfo | null>(null);
+  useEffect(() => {
+    setInfo(null);
+    api.getMinecraftInfo(run.id, size).then(setInfo).catch(() => setInfo(null));
+  }, [run.id, size]);
+  if (!info) return <div className="mc-card"><small>Building…</small></div>;
+  const [w, h, l] = info.dims;
+  const fov = Math.round(info.fov_deg);
+  return (
+    <div className="mc-card">
+      <strong>Minecraft build</strong>
+      <small>{w} × {h} × {l} blocks · {info.blocks.toLocaleString()} placed</small>
+      <a className="button primary" href={api.schemUrl(run.id, size)} download>Download .schem</a>
+      <details>
+        <summary>How to line it up in game</summary>
+        <ol>
+          <li>Put the file in <code>.minecraft/config/worldedit/schematics/</code> (WorldEdit mod) or the server's <code>plugins/WorldEdit/schematics/</code>.</li>
+          <li>Stand where the photo was taken from and face south: <code>/tp @s ~ ~ ~ 0 0</code></li>
+          <li><code>//schem load &lt;file name&gt;</code>, then <code>//paste</code>. The photo's camera lands at your eyes.</li>
+          <li>Options → FOV: <strong>{fov}</strong>{fov < 30 || fov > 110 ? " (outside Minecraft's 30–110 range; use the closest)" : ""}, FOV Effects off, F1 to hide the HUD.</li>
+        </ol>
+      </details>
+    </div>
+  );
+}
+
+function Strip({ run, showTears, chain, blockSize }: { run: api.RunMeta; showTears: boolean; chain?: api.TelephoneStep[]; blockSize: number }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
   const [offAxis, setOffAxis] = useState<string[] | null>(null);
   const [rendering, setRendering] = useState(false);
@@ -236,6 +276,7 @@ function Strip({ run, showTears, chain }: { run: api.RunMeta; showTears: boolean
         )
       )}
       {chain?.map((g, j) => tile(chainStart + j, `gen ${g.step}`))}
+      {hasDepth && <MinecraftCard run={run} size={blockSize} />}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -261,6 +302,8 @@ export default function App() {
   const [teleYaw, setTeleYaw] = useState(15);
   const [playing, setPlaying] = useState<string | null>(null); // progress text while chains run
   const [looping, setLooping] = useState(false);
+  const [mcSize, setMcSize] = useState(128);
+  const [showBlocks, setShowBlocks] = useState(false);
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
     setNavState((n) => {
@@ -437,6 +480,7 @@ export default function App() {
                 key={id /* stays mounted across generations, so the synced camera is kept */}
                 id={shownGeneration(id)?.id ?? id}
                 generation={shownGeneration(id)}
+                blockSize={showBlocks ? mcSize : undefined}
                 mode={mode}
                 pointSize={pointSize}
                 snapKey={snapKey}
@@ -471,7 +515,16 @@ export default function App() {
                 </div>
               )}
             </div>
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} chain={chains[r.id]} />)}
+            <div className="telephone" aria-label="Minecraft build">
+              <strong>Minecraft build</strong>
+              <span className="hint">looks like the image from one spot: the original camera</span>
+              <Slider label="Size" min={32} max={256} step={16} value={mcSize} unit=" blocks" onChange={setMcSize} />
+              <label className="check">
+                <input type="checkbox" checked={showBlocks} onChange={(e) => setShowBlocks(e.target.checked)} />
+                Show as blocks
+              </label>
+            </div>
+            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} chain={chains[r.id]} blockSize={mcSize} />)}
           </div>
         )}
       </main>

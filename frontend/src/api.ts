@@ -89,3 +89,28 @@ export type TelephoneStep = { step: number; id: string; turned: number; meta: Ru
 /** Render the cloud `yaw` degrees to the side, feed it back into the same model, `steps` times. */
 export const telephone = (id: string, steps: number, yaw: number) =>
   fetch(`${API}/runs/${id}/telephone?steps=${steps}&yaw=${yaw}`, { method: "POST" }).then(json<TelephoneStep[]>);
+
+export type MinecraftInfo = {
+  dims: [number, number, number]; // width (x), height (y), length (z) in blocks
+  blocks: number;
+  fov_deg: number; // vertical FOV that makes the build line up with the image
+  offset: [number, number, number];
+  data_version: number;
+  top_blocks: [string, number][];
+};
+export type BlockPreview = { n: number; size: number; lo: Float32Array; ijk: Int16Array; rgb: Uint8Array };
+
+export const getMinecraftInfo = (id: string, size: number) =>
+  fetch(`${API}/runs/${id}/minecraft.json?size=${size}`).then(json<MinecraftInfo>);
+
+// Layout documented in backend/store.py:minecraft_preview_bin.
+export async function getBlocks(id: string, size: number): Promise<BlockPreview> {
+  const r = await fetch(`${API}/runs/${id}/minecraft.bin?size=${size}`);
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  const buf = await r.arrayBuffer();
+  const n = new Uint32Array(buf, 0, 1)[0];
+  const f = new Float32Array(buf, 4, 4);
+  return { n, size: f[0], lo: f.slice(1), ijk: new Int16Array(buf, 20, n * 3), rgb: new Uint8Array(buf, 20 + n * 6, n * 3) };
+}
+
+export const schemUrl = (id: string, size: number) => `${API}/runs/${id}/minecraft.schem?size=${size}`;

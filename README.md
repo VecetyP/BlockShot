@@ -92,6 +92,34 @@ enlarge it.
 - Generations are ordinary cached runs tagged `meta.telephone = {root, step, yaw}`, hidden from
   History. Replaying a chain is instant. `POST /runs/{id}/telephone?steps=&yaw=`.
 
+## Minecraft build
+
+Turns a run into a Minecraft build that looks like the input image from one spot, the original
+camera. Set **Size** (blocks along the longest side) in the bar above the strips. **Show as blocks**
+previews the build as cubes in every panel, and each strip has **Download .schem** with
+instructions:
+
+1. Put the file in `.minecraft/config/worldedit/schematics/` (WorldEdit mod) or a server's
+   `plugins/WorldEdit/schematics/`.
+2. Stand where the photo was taken from and face south: `/tp @s ~ ~ ~ 0 0`.
+3. `//schem load <name>`, then `//paste`. The paste offset puts the photo's camera at your eyes.
+4. Set FOV to the value the card shows (the input camera's vertical field of view), turn FOV
+   Effects off, and press F1.
+
+How it works (`backend/minecraft.py`):
+
+- The cloud is snapped to a block grid in Minecraft's axes, with the camera facing south. The
+  outermost 0.5% of points on each axis are ignored when sizing the build.
+- Each block's colour is the mean of its points in linear light. The block is the closest palette
+  entry in CIELAB.
+- The output is a Sponge v2 schematic (DataVersion 2586, Minecraft 1.16.5; newer versions upgrade
+  it on load).
+- The palette (`backend/minecraft_palette.json`) holds the mean texture colours of 107 full,
+  same-on-every-face, non-falling, non-glowing blocks. `tools/minecraft_palette.py` measures them
+  from a Minecraft jar you own; only the numbers are stored.
+- It's a single-view build: surfaces are one block thick and nothing is built behind what the camera
+  saw.
+
 ## API
 
 | Route | |
@@ -104,6 +132,7 @@ enlarge it.
 | `GET /runs/{id}/maps/{depth,confidence,normals,discontinuity,curl,residual}.png` | display-normalized 2D maps |
 | `GET /runs/{id}/analysis?force=` | reprojection, integrability, top tears |
 | `GET /runs/{id}/field/{curl,residual}.bin` | `f32[N]` per point, same order as `points.bin` |
+| `GET /runs/{id}/minecraft.{json,bin,schem}?size=` | Minecraft build: summary, block preview, Sponge schematic |
 | `POST /runs/{id}/offaxis` | renders the ±5/15/30° views, returns their URLs |
 
 ## Models

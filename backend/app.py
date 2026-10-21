@@ -114,6 +114,35 @@ def field(rid: str, kind: str, stride: int | None = None):
     return Response(b, media_type="application/octet-stream")
 
 
+def _check_minecraft(rid: str, size: int) -> None:
+    _run_or_404(rid)
+    if not store.has_depth(store.load_meta(rid)):
+        raise HTTPException(400, "this model has no depth to build from")
+    if not 16 <= size <= 512:
+        raise HTTPException(400, "size must be 16..512 blocks")
+
+
+@app.get("/runs/{rid}/minecraft.json")
+def minecraft_info(rid: str, size: int = 128):
+    """Build summary: dimensions, block count, FOV and paste offset."""
+    _check_minecraft(rid, size)
+    return store.minecraft_info(rid, size)
+
+
+@app.get("/runs/{rid}/minecraft.bin")
+def minecraft_preview(rid: str, size: int = 128):
+    _check_minecraft(rid, size)
+    return Response(store.minecraft_preview_bin(rid, size), media_type="application/octet-stream")
+
+
+@app.get("/runs/{rid}/minecraft.schem")
+def minecraft_schem(rid: str, size: int = 128):
+    """Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
+    _check_minecraft(rid, size)
+    data, filename = store.minecraft_schem(rid, size)
+    return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @app.post("/runs/{rid}/telephone")
 def telephone(rid: str, steps: int = 8, yaw: float = 15):
     """Render the cloud `yaw` degrees to the side, feed it back into the same model, repeat `steps` times."""

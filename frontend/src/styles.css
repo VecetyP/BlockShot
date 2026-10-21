@@ -173,6 +173,22 @@ main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-wid
 .telephone strong { font-size: 13px; font-weight: 600; }
 .telephone button.primary { padding: 5px 14px; }
 .gen-badge { color: var(--accent); }
+.telephone + .telephone { top: auto; position: static; }
+.mc-card {
+  flex: none; align-self: stretch; display: flex; flex-direction: column; gap: 6px; width: 260px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
+}
+.mc-card strong { font-size: 13px; font-weight: 600; }
+.mc-card details { font-size: 12px; color: var(--muted); }
+.mc-card summary { cursor: pointer; color: var(--text); }
+.mc-card ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.mc-card code { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--text); background: var(--panel); padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere; }
+a.button {
+  display: inline-block; text-align: center; text-decoration: none; font: inherit; border-radius: var(--radius);
+  padding: 6px 12px;
+}
+a.button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+a.button.primary:hover { background: #74b7ff; }
 
 /* Lightbox */
 .lightbox {

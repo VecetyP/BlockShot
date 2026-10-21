@@ -1,4 +1,5 @@
 import dataclasses
+import functools
 import hashlib
 import io
 import json
@@ -14,6 +15,7 @@ from PIL import Image
 from .analysis import integrability, offaxis
 from .analysis.discontinuity import discontinuity, top_tears
 from .analysis.reproject import reprojection_error
+from . import minecraft
 from .models import registry
 from .models.base import Prediction
 
@@ -295,3 +297,38 @@ def telephone(rid: str, steps: int, yaw: float) -> list[dict]:
 
 def _rgb(rid: str) -> np.ndarray:
     return np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
+
+
+@functools.lru_cache(maxsize=8)
+def minecraft_build(rid: str, size: int) -> minecraft.Build:
+    a = load_arrays(rid)
+    return minecraft.build(a["points"], _rgb(rid), a["mask"], a["intrinsics"], size)
+
+
+def minecraft_info(rid: str, size: int) -> dict:
+    b = minecraft_build(rid, size)
+    counts = np.bincount(b.block, minlength=len(minecraft.BLOCK_NAMES))
+    top = [(minecraft.BLOCK_NAMES[i], int(counts[i])) for i in np.argsort(-counts)[:8] if counts[i]]
+    return {
+        "dims": b.dims,
+        "blocks": len(b.ijk),
+        "fov_deg": round(b.fov_deg, 1),
+        "offset": b.offset,
+        "data_version": minecraft.DATA_VERSION,
+        "top_blocks": top,
+    }
+
+
+def minecraft_preview_bin(rid: str, size: int) -> bytes:
+    """uint32 N, float32 block_size, float32 lo[3], int16 ijk[N*3], uint8 rgb[N*3] (block colours).
+    Block (i, j, k) spans lo + [ijk, ijk+1) * block_size in Minecraft axes."""
+    b = minecraft_build(rid, size)
+    head = np.uint32(len(b.ijk)).tobytes() + np.array([b.block_size, *b.lo], "<f4").tobytes()
+    return head + b.ijk.astype("<i2").tobytes() + minecraft.BLOCK_RGB[b.block].tobytes()
+
+
+def minecraft_schem(rid: str, size: int) -> tuple[bytes, str]:
+    meta = load_meta(rid)
+    stem = Path(str(meta.get("source") or rid)).stem
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)[:40] or "build"
+    return minecraft.schematic(minecraft_build(rid, size)), f"{safe}_{model_of(rid)}_{size}.schem"
