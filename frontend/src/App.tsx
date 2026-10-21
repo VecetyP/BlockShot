@@ -1,10 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import { COLOR_MODES, FIELD_MODES, type ColorMode } from "./colors";
-import Viewer, { OrbitSync } from "./Viewer";
+import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
 
 const MAX_PANELS = 4;
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
+
+const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1, pan: 1 };
+const NAV_KEY = "nav-settings";
+
+// A per-viewer convenience: storage can be unavailable (private window, blocked site data).
+function loadNav(): NavSettings {
+  try {
+    return { ...DEFAULT_NAV, ...JSON.parse(localStorage.getItem(NAV_KEY) ?? "{}") };
+  } catch {
+    return DEFAULT_NAV;
+  }
+}
+
+function Slider(props: { label: string; min: number; max: number; step: number; value: number; unit?: string; onChange: (v: number) => void }) {
+  return (
+    <label className="size">
+      {props.label}
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        onChange={(e) => props.onChange(+e.target.value)}
+      />
+      <span className="val">{props.value}{props.unit ?? "×"}</span>
+    </label>
+  );
+}
 
 const pct = (x?: number) => (x === undefined ? "–" : `${(100 * x).toFixed(1)}%`);
 
@@ -14,6 +43,7 @@ function Panel(props: {
   pointSize: number;
   snapKey: number;
   sync?: OrbitSync;
+  nav: NavSettings;
   titled: boolean;
   showTears: boolean;
 }) {
@@ -76,6 +106,7 @@ function Panel(props: {
           pointSize={props.pointSize}
           snapKey={props.snapKey + localSnap}
           sync={props.sync}
+          nav={props.nav}
         />
       ) : (
         <p className="empty">{error ?? "Loading…"}</p>
@@ -156,6 +187,15 @@ export default function App() {
   const [pointSize, setPointSize] = useState(2);
   const [snapKey, setSnapKey] = useState(0);
   const [showTears, setShowTears] = useState(false);
+  const [nav, setNavState] = useState<NavSettings>(loadNav);
+  const setNav = (patch: Partial<NavSettings>) =>
+    setNavState((n) => {
+      const next = { ...n, ...patch };
+      try {
+        localStorage.setItem(NAV_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
   // A fresh sync object per selection, so panels from an old grid don't keep listening.
   const sync = useMemo(() => new OrbitSync(), [selected.join()]);
 
@@ -258,16 +298,22 @@ export default function App() {
               </button>
             ))}
           </div>
-          <label className="size">
-            Point size
-            <input type="range" min={1} max={8} step={0.5} value={pointSize} onChange={(e) => setPointSize(+e.target.value)} />
-            {pointSize}px
-          </label>
+          <Slider label="Point size" min={1} max={8} step={0.5} value={pointSize} unit="px" onChange={setPointSize} />
           <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
           <label className="size">
             <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
             Tears
           </label>
+        </div>
+        <div className="toolbar nav" aria-label="Navigation">
+          <span className="hint" title="Click or hover a viewer first. In a comparison grid the panel under the mouse leads.">
+            <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster
+          </span>
+          <Slider label="Move" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
+          <Slider label="Orbit" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
+          <Slider label="Zoom" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
+          <Slider label="Pan" min={0.1} max={3} step={0.1} value={nav.pan} onChange={(pan) => setNav({ pan })} />
+          <button onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
         </div>
 
         <div className={`stage grid-${selected.length}`}>
@@ -280,6 +326,7 @@ export default function App() {
                 pointSize={pointSize}
                 snapKey={snapKey}
                 sync={selected.length > 1 ? sync : undefined}
+                nav={nav}
                 titled={selected.length > 1}
                 showTears={showTears}
               />

@@ -36,6 +36,11 @@ The viewer renders with a projection built from the run's intrinsics, so **Snap 
 (camera at the origin looking down +Z) reproduces the input image pixel-for-pixel. Color modes:
 RGB, depth, confidence (when the model has it), discontinuity.
 
+Navigation: drag to orbit, right-drag to pan, scroll to zoom. **W/A/S/D** fly, **Q/E** down/up,
+**Shift** faster (keys drive the viewer under the mouse; in the grid the others follow). The second
+toolbar row sets move, orbit, zoom and pan sensitivity, remembered per browser. Move speed is in
+median-depths per second, so it feels the same for metric and relative models.
+
 Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.npz`,
 `points.ply` (RGB-colored, camera frame: +X right, +Y down, +Z forward), `input.png` and
 `meta.json`. Re-running the same image and model hits the cache; pass `--force` to recompute.
