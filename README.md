@@ -78,31 +78,6 @@ Computed on first request per run and cached in `runs/<id>/analysis.json` (+ `an
 First numbers on `samples/penrose_triangle.png`: MoGe-3 normals leave 6.0% non-integrable and
 Marigold normals 11.1%. Depth Anything, VGGT and MoGe depth all give 0% (as they must).
 
-## Gap fill (what the camera couldn't see)
-
-A single image says nothing about what's behind its surfaces. **Fill gaps** (third toolbar row)
-continues hidden surfaces behind occluding edges, so they don't open up as holes when you move.
-`backend/analysis/fill.py`:
-
-- **Where:** at every depth edge, the near side hides part of the far side. Pixels on the near side,
-  up to **Reach** (% of image width) from the edge, get a hidden layer behind them. It's grown along
-  the near surface only, so a slanted wall isn't mistaken for an occluder.
-- **What:** the far surface is extended behind them by a smooth solve in inverse depth, where planes
-  are exactly linear. **slope** (biharmonic) keeps its tilt and reproduces a hidden plane exactly;
-  **curvature** (triharmonic) also keeps it bending, but amplifies noise in predicted depth and
-  scores lower. Colors are blended in from the visible far surface. The fill is clamped to lie
-  behind the occluder and within 15% of the far surface's depth.
-- **Seeing it:** **Tint filled points** shows invented points in cyan. The fill sits exactly behind
-  what the input camera saw, so the snapped view is unchanged.
-- **Measuring it:** off-axis renders mark gaps. **Magenta** is a view into hidden space behind an
-  edge, within reach (what the fill is for). **Violet** is other hidden space: object back sides, or
-  far behind an edge. With the fill on, each angle shows the share of magenta it covers. Holes up to
-  2 px wide are treated as undersampling, not gaps.
-- **Limits:** continuation assumes the hidden part belongs to the surface seen beyond the edge. That
-  fits a wall or ground behind an object (Minecraft and Roblox scenes do well: 60–80% covered at ±5°
-  with slope). It's wrong for thin shells: behind a bowl's front wall is the wall's own inside, not
-  the bowl's far interior. Back sides need a shape prior (symmetry, or a generative model).
-
 ## API
 
 | Route | |
@@ -115,8 +90,7 @@ continues hidden surfaces behind occluding edges, so they don't open up as holes
 | `GET /runs/{id}/maps/{depth,confidence,normals,discontinuity,curl,residual}.png` | display-normalized 2D maps |
 | `GET /runs/{id}/analysis?force=` | reprojection, integrability, top tears |
 | `GET /runs/{id}/field/{curl,residual}.bin` | `f32[N]` per point, same order as `points.bin` |
-| `GET /runs/{id}/fill.bin?reach=&order=` | gap-fill points: `uint32 N`, `f32 xyz[3N]`, `u8 rgb[3N]` |
-| `POST /runs/{id}/offaxis?reach=&order=` | ±5/15/30° renders with gaps marked (and the fill + coverage) |
+| `POST /runs/{id}/offaxis` | renders the ±5/15/30° views, returns their URLs |
 
 ## Models
 

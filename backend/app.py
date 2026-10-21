@@ -114,37 +114,17 @@ def field(rid: str, kind: str, stride: int | None = None):
     return Response(b, media_type="application/octet-stream")
 
 
-def _check_fill(rid: str, reach: int | None, order: str | None) -> None:
+@app.post("/runs/{rid}/offaxis")
+def offaxis(rid: str):
     _run_or_404(rid)
     if not store.has_depth(store.load_meta(rid)):
-        raise HTTPException(400, "run has no depth to work with")
-    if order is not None and (order not in store.FILL_ORDERS or reach is None or not 1 <= reach <= 50):
-        raise HTTPException(400, f"order must be one of {list(store.FILL_ORDERS)} with reach (% of width) in 1..50")
+        raise HTTPException(400, "run has no depth to re-render")
+    return [f"/runs/{rid}/offaxis/{n}" for n in store.offaxis_renders(rid)]
 
 
-@app.get("/runs/{rid}/fill.bin")
-def fill(rid: str, reach: int = store.DEFAULT_REACH, order: str = "slope"):
-    """Gap-fill points behind occluders, up to `reach` % of the image width from each occluding edge:
-    uint32 N, f32 xyz[3N], u8 rgb[3N]."""
-    _check_fill(rid, reach, order)
-    return Response(store.fill_bin(rid, reach, order), media_type="application/octet-stream")
-
-
-@app.post("/runs/{rid}/offaxis")
-def offaxis(rid: str, reach: int | None = None, order: str | None = None):
-    """Renders at ±5/15/30°, gaps in magenta; with reach+order also renders with the fill and coverage."""
-    _check_fill(rid, reach, order)
-    stats = store.offaxis_renders(rid, reach, order)
-    for e in stats:
-        for k in ("gaps", "filled"):
-            if k in e:
-                e[k] = f"/runs/{rid}/offaxis/{e[k]}"
-    return stats
-
-
-@app.get("/runs/{rid}/offaxis/{variant}/{name}")
-def offaxis_png(rid: str, variant: str, name: str):
-    path = (store.RUNS / rid / "offaxis" / variant / name).resolve()
-    if not path.is_relative_to((store.RUNS / rid / "offaxis").resolve()) or path.suffix != ".png" or not path.is_file():
+@app.get("/runs/{rid}/offaxis/{name}")
+def offaxis_png(rid: str, name: str):
+    path = (store.RUNS / rid / "offaxis" / name).resolve()
+    if not path.is_relative_to(store.RUNS.resolve()) or path.parent.name != "offaxis" or not path.is_file():
         raise HTTPException(404)
     return Response(path.read_bytes(), media_type="image/png")
