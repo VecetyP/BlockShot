@@ -2,6 +2,9 @@ import dataclasses
 import hashlib
 import io
 import json
+import math
+import os
+import threading
 import time
 from pathlib import Path
 
@@ -15,6 +18,26 @@ from .models import registry
 from .models.base import Prediction
 
 RUNS = Path(__file__).resolve().parent.parent / "runs"
+
+# Requests run in a thread pool, and a 4-panel grid fires several requests per run at once. Without
+# these locks every one of them recomputed the same analysis in parallel (~1-2 GB each), which ran a
+# 32 GB laptop out of memory within a minute; and two predictions shared the GPU.
+_gpu_lock = threading.Lock()
+_analysis_lock = threading.Lock()  # ponytail: one analysis at a time; per-run locks if this queues up
+
+MAX_ANALYSIS_PIXELS = 768 * 768  # the Poisson solve's LU needs ~1.2 GB here and grows faster than linear
+
+
+def _atomic(path: Path, write) -> None:
+    """write(file) to a temp file, then rename over `path`, so readers never see a half-written file."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        write(f)
+    os.replace(tmp, path)
+
+
+def _write_json(path: Path, obj) -> None:
+    _atomic(path, lambda f: f.write(json.dumps(obj, indent=2).encode()))
 
 
 def decode_image(data: bytes) -> np.ndarray:
@@ -37,11 +60,14 @@ def predict_cached(data: bytes, model: str, force: bool = False, source: str | N
     if not force and (d / "meta.json").exists():
         return rid, load_meta(rid), True
     image = decode_image(data)
-    try:
-        pred = registry.get(model).predict(image)
-    finally:
-        registry.free_cache()
-    meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source)
+    with _gpu_lock:
+        if not force and (d / "meta.json").exists():  # an identical request finished while we waited
+            return rid, load_meta(rid), True
+        try:
+            pred = registry.get(model).predict(image)
+        finally:
+            registry.free_cache()
+        meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source)
     return rid, meta, False
 
 
@@ -49,7 +75,7 @@ def save(d: Path, rid: str, image: np.ndarray, pred: Prediction, **info) -> dict
     d.mkdir(parents=True, exist_ok=True)
     arrays = {k: v for k, v in dataclasses.asdict(pred).items() if isinstance(v, np.ndarray)}
     arrays |= {f"raw_{k}": v for k, v in pred.raw.items()}
-    np.savez_compressed(d / "prediction.npz", **arrays)
+    _atomic(d / "prediction.npz", lambda f: np.savez_compressed(f, **arrays))
     Image.fromarray(image).save(d / "input.png")
     write_ply(d / "points.ply", pred.points[pred.mask], image[pred.mask])
     meta = {
@@ -64,7 +90,7 @@ def save(d: Path, rid: str, image: np.ndarray, pred: Prediction, **info) -> dict
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         **pred.meta,
     }
-    (d / "meta.json").write_text(json.dumps(meta, indent=2))
+    _write_json(d / "meta.json", meta)  # written last: its presence marks the run as complete
     return meta
 
 
@@ -105,19 +131,52 @@ def has_depth(meta: dict) -> bool:
     return not str(meta.get("depth_source", "")).startswith("none")  # normal-only models store a plane
 
 
+def _analysis_grid(h: int, w: int, K: np.ndarray):
+    """Pixel subsampling for the integrability solve: stride s, the slices, and intrinsics for the
+    subsampled grid (its pixel centers land exactly on original pixel centers)."""
+    s = max(1, math.ceil(math.sqrt(h * w / MAX_ANALYSIS_PIXELS)))
+    o = s // 2
+    K2 = K.astype(np.float64).copy()
+    K2[0, 0], K2[1, 1] = K[0, 0] / s, K[1, 1] / s
+    K2[0, 2], K2[1, 2] = (K[0, 2] - o - 0.5) / s + 0.5, (K[1, 2] - o - 0.5) / s + 0.5
+    return s, (slice(o, None, s), slice(o, None, s)), K2
+
+
+def _upsample(x: np.ndarray, s: int, h: int, w: int) -> np.ndarray:
+    """Nearest-neighbour back to (h, w): each subsampled pixel fills its s x s block."""
+    if s == 1:
+        return x
+    y = np.repeat(np.repeat(x, s, 0), s, 1)
+    y = np.pad(y, ((0, max(0, h - y.shape[0])), (0, max(0, w - y.shape[1]))), mode="edge")
+    return y[:h, :w]
+
+
 def analysis(rid: str, force: bool = False) -> dict:
     """Summary of every Phase 4 analysis for a run, cached as analysis.json (+ analysis.npz maps)."""
     path = RUNS / rid / "analysis.json"
     if path.exists() and not force:
         return json.loads(path.read_text())
+    with _analysis_lock:
+        if path.exists() and not force:  # computed by another request while we waited
+            return json.loads(path.read_text())
+        return _compute_analysis(rid, path)
+
+
+def _compute_analysis(rid: str, path: Path) -> dict:
     a, meta = load_arrays(rid), load_meta(rid)
     pts, mask, K = a["points"], a["mask"], a["intrinsics"]
+    h, w = mask.shape
     depth_ok = has_depth(meta)
-    out: dict = {"reprojection_px": reprojection_error(pts, K, mask) if depth_ok else None, "integrability": {}}
+    s, sl, K2 = _analysis_grid(h, w, K)
+    out: dict = {
+        "reprojection_px": reprojection_error(pts, K, mask) if depth_ok else None,
+        "integrability": {},
+        "integrability_stride": s,
+    }
     maps = {}
     sources = {
-        "native": integrability.from_normals(a["normals"], K, mask) if "normals" in a else None,
-        "derived": integrability.from_depth(a["depth"], mask) if depth_ok else None,
+        "native": integrability.from_normals(a["normals"][sl], K2, mask[sl]) if "normals" in a else None,
+        "derived": integrability.from_depth(a["depth"][sl], mask[sl]) if depth_ok else None,
     }
     for src, field in sources.items():
         if field is None:
@@ -132,13 +191,14 @@ def analysis(rid: str, force: bool = False) -> dict:
         }
         # Stored relative to the run's RMS gradient: dimensionless and comparable across runs and models.
         scale = r.grad_rms or 1.0
-        maps[f"{src}_curl"], maps[f"{src}_residual"] = r.curl / scale, r.residual / scale
+        maps[f"{src}_curl"] = _upsample(r.curl / scale, s, h, w)
+        maps[f"{src}_residual"] = _upsample(r.residual / scale, s, h, w)
     out["tears"] = []
     if depth_ok:
         d = discontinuity(pts, mask)
         out["tears"] = [{"u": u, "v": v, "score": s, "xyz": pts[v, u].tolist()} for u, v, s in top_tears(d)]
-    np.savez_compressed(RUNS / rid / "analysis.npz", **maps)
-    path.write_text(json.dumps(out, indent=2))
+    _atomic(RUNS / rid / "analysis.npz", lambda f: np.savez_compressed(f, **maps))
+    _write_json(path, out)  # last: marks the analysis as complete
     return out
 
 
@@ -195,9 +255,11 @@ def offaxis_renders(rid: str) -> list[str]:
     d = RUNS / rid / "offaxis"
     names = [f"yaw_{y:+03d}.png" for y in offaxis.YAWS]
     if not all((d / n).exists() for n in names):
-        d.mkdir(exist_ok=True)
-        a = load_arrays(rid)
-        rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
-        for y, n in zip(offaxis.YAWS, names):
-            Image.fromarray(offaxis.render(a["points"], rgb, a["mask"], a["intrinsics"], y)).save(d / n)
+        with _analysis_lock:
+            d.mkdir(exist_ok=True)
+            a = load_arrays(rid)
+            rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
+            for y, n in zip(offaxis.YAWS, names):
+                img = Image.fromarray(offaxis.render(a["points"], rgb, a["mask"], a["intrinsics"], y))
+                _atomic(d / n, lambda f: img.save(f, format="PNG"))
     return names

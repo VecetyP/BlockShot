@@ -32,3 +32,16 @@ def test_offaxis_at_zero_yaw_reproduces_the_input():
     same = (out == rgb).all(-1)
     same[:, 32] = True  # the near side's 2x2 splats correctly cover the far side of the step
     assert same.mean() > 0.99
+
+
+def test_large_images_are_analyzed_on_a_consistent_subsampled_grid():
+    from backend import store
+    from backend.analysis import integrability as I
+    from tests.fixtures import fields
+
+    n, K, mask = fields.sphere(n=1100, f=1300.0)
+    s, sl, K2 = store._analysis_grid(1100, 1100, K)
+    assert s == 2  # 1100² is over the cap
+    r = I.analyze(I.from_normals(n[sl], K2, mask[sl]))
+    assert r.residual_fraction < 0.01
+    assert store._upsample(r.residual, s, 1100, 1100).shape == (1100, 1100)

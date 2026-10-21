@@ -32,11 +32,12 @@ def unload(name: str | None = None):
 
 
 @app.post("/predict")
-async def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False)):
+def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False)):
+    # Plain def: FastAPI runs it in a worker thread, so History and images keep loading during inference.
     unknown = [m for m in models if m not in registry.MODELS]
     if unknown:
         raise HTTPException(400, f"unknown models: {unknown}")
-    data = await image.read()
+    data = image.file.read()
     out = []
     for m in models:  # sequential on purpose: one model's activations on the GPU at a time
         rid, meta, cached = store.predict_cached(data, m, force=force, source=image.filename)
