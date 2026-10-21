@@ -166,14 +166,11 @@ main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-wid
 }
 .tear-list { margin: 0; padding: 0 0 0 26px; font-size: 12px; columns: 2; column-gap: 18px; flex: none; }
 .offaxis { align-self: center; flex: none; }
-.telephone {
+.strip-bar {
   position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.telephone strong { font-size: 13px; font-weight: 600; }
-.telephone button.primary { padding: 5px 14px; }
-.gen-badge { color: var(--accent); }
-.telephone + .telephone { top: auto; position: static; }
+.strip-bar strong { font-size: 13px; font-weight: 600; }
 .mc-card {
   flex: none; align-self: stretch; display: flex; flex-direction: column; gap: 6px; width: 260px;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);

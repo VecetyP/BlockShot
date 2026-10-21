@@ -45,14 +45,3 @@ def test_large_images_are_analyzed_on_a_consistent_subsampled_grid():
     r = I.analyze(I.from_normals(n[sl], K2, mask[sl]))
     assert r.residual_fraction < 0.01
     assert store._upsample(r.residual, s, 1100, 1100).shape == (1100, 1100)
-
-
-def test_patch_pinholes_fills_specks_but_not_real_gaps():
-    img = np.full((40, 40, 3), 200, np.uint8)
-    hit = np.ones((40, 40), bool)
-    hit[10, 10] = False  # a pinhole between splats
-    hit[20:36, 20:36] = False  # a real disocclusion
-    img[~hit] = offaxis.BACKGROUND
-    out = offaxis.patch_pinholes(img, hit)
-    assert (out[10, 10] == 200).all()
-    assert (out[28, 28] == offaxis.BACKGROUND).all()

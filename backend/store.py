@@ -53,8 +53,8 @@ def run_id(image_sha: str, model: str, version: str) -> str:
     return f"{image_sha[:16]}_{model}_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
 
 
-def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None, **info) -> tuple[str, dict, bool]:
-    """Returns (run_id, meta, cached). Extra keyword args are stored in meta.json."""
+def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None) -> tuple[str, dict, bool]:
+    """Returns (run_id, meta, cached)."""
     sha = hashlib.sha256(data).hexdigest()
     version = registry.cls(model).version
     rid = run_id(sha, model, version)
@@ -69,7 +69,7 @@ def predict_cached(data: bytes, model: str, force: bool = False, source: str | N
             pred = registry.get(model).predict(image)
         finally:
             registry.free_cache()
-        meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source, **info)
+        meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source)
     return rid, meta, False
 
 
@@ -270,29 +270,6 @@ def offaxis_renders(rid: str) -> list[str]:
 def model_of(rid: str) -> str:
     """Registry name of the model that made a run (meta["model"] holds the weights' repo id)."""
     return rid.split("_", 1)[1].rsplit("_", 1)[0]
-
-
-def telephone(rid: str, steps: int, yaw: float) -> list[dict]:
-    """The telephone game: render the run's cloud `yaw` degrees to the side, feed that image back into
-    the same model, and repeat from the new cloud. Every generation is an ordinary cached run, tagged
-    with meta["telephone"] = {root, step, yaw}, so replaying a chain is instant."""
-    root = load_meta(rid)
-    model = model_of(rid)
-    chain, cur = [], rid
-    for step in range(1, steps + 1):
-        a = load_arrays(cur)
-        # Render on the capped analysis grid so huge inputs don't make huge generations.
-        _, sl, K = _analysis_grid(*a["mask"].shape, a["intrinsics"])
-        img, hit = offaxis.render(a["points"][sl], _rgb(cur)[sl], a["mask"][sl], K, yaw, with_hit=True)
-        buf = io.BytesIO()
-        Image.fromarray(offaxis.patch_pinholes(img, hit)).save(buf, format="PNG")
-        cur, meta, _ = predict_cached(
-            buf.getvalue(), model,
-            source=f"{root.get('source') or rid} · telephone {step}",
-            telephone={"root": rid, "step": step, "yaw": yaw},
-        )
-        chain.append({"step": step, "id": cur, "turned": step * yaw, "meta": meta})
-    return chain
 
 
 def _rgb(rid: str) -> np.ndarray:

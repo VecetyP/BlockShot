@@ -12,7 +12,6 @@ export type RunMeta = {
   intrinsics: number[][];
   has_confidence: boolean;
   created: string;
-  telephone?: { root: string; step: number; yaw: number }; // set on telephone-game generations
   [k: string]: unknown;
 };
 
@@ -83,12 +82,6 @@ export const getField = async (id: string, kind: string) => {
 
 export const renderOffAxis = (id: string) =>
   fetch(`${API}/runs/${id}/offaxis`, { method: "POST" }).then(json<string[]>).then((u) => u.map((x) => API + x));
-
-export type TelephoneStep = { step: number; id: string; turned: number; meta: RunMeta };
-
-/** Render the cloud `yaw` degrees to the side, feed it back into the same model, `steps` times. */
-export const telephone = (id: string, steps: number, yaw: number) =>
-  fetch(`${API}/runs/${id}/telephone?steps=${steps}&yaw=${yaw}`, { method: "POST" }).then(json<TelephoneStep[]>);
 
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks

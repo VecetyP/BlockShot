@@ -46,7 +46,6 @@ function Panel(props: {
   nav: NavSettings;
   titled: boolean;
   showTears: boolean;
-  generation?: api.TelephoneStep; // telephone-game generation shown instead of the original
   blockSize?: number; // when set, show the Minecraft build of this many blocks instead of the points
 }) {
   const [meta, setMeta] = useState<api.RunMeta | null>(null);
@@ -94,9 +93,6 @@ function Panel(props: {
         <div className="panel-head">
           <span>
             {props.titled && <>{modelLabel(meta)} <small>{meta.scale_kind}</small> </>}
-            {props.generation && (
-              <small className="gen-badge">gen {props.generation.step} · turned {props.generation.turned}° </small>
-            )}
             {analysis && (
               <small className="stats">
                 {[
@@ -210,7 +206,7 @@ function MinecraftCard({ run, size }: { run: api.RunMeta; size: number }) {
   );
 }
 
-function Strip({ run, showTears, chain, blockSize }: { run: api.RunMeta; showTears: boolean; chain?: api.TelephoneStep[]; blockSize: number }) {
+function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boolean; blockSize: number }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
   const [offAxis, setOffAxis] = useState<string[] | null>(null);
   const [rendering, setRendering] = useState(false);
@@ -238,9 +234,7 @@ function Strip({ run, showTears, chain, blockSize }: { run: api.RunMeta; showTea
     { src: api.inputUrl(run.id), caption: `${label} · input` },
     ...maps.map((k) => ({ src: api.mapUrl(run.id, k), caption: `${label} · ${k}` })),
     ...(offAxis ?? []).map((u) => ({ src: u, caption: `${label} · ${u.match(/yaw_([+-]\d+)/)?.[1]}°` })),
-    ...(chain ?? []).map((g) => ({ src: api.inputUrl(g.id), caption: `${label} · telephone gen ${g.step} (turned ${g.turned}°)` })),
   ];
-  const chainStart = 1 + maps.length + (offAxis?.length ?? 0);
   const tile = (i: number, caption: string, extra?: ReactNode) => (
     <figure key={items[i].src} className="tile">
       <button className="thumb" onClick={() => setOpen(i)} aria-label={`Enlarge ${items[i].caption}`}>
@@ -275,7 +269,6 @@ function Strip({ run, showTears, chain, blockSize }: { run: api.RunMeta; showTea
           </button>
         )
       )}
-      {chain?.map((g, j) => tile(chainStart + j, `gen ${g.step}`))}
       {hasDepth && <MinecraftCard run={run} size={blockSize} />}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
@@ -295,13 +288,6 @@ export default function App() {
   const [pointSize, setPointSize] = useState(2);
   const [snapKey, setSnapKey] = useState(0);
   const [showTears, setShowTears] = useState(false);
-  // Telephone game: chains of generations per root run, and which generation the panels show.
-  const [chains, setChains] = useState<Record<string, api.TelephoneStep[]>>({});
-  const [generation, setGeneration] = useState(0);
-  const [teleSteps, setTeleSteps] = useState(6);
-  const [teleYaw, setTeleYaw] = useState(15);
-  const [playing, setPlaying] = useState<string | null>(null); // progress text while chains run
-  const [looping, setLooping] = useState(false);
   const [mcSize, setMcSize] = useState(128);
   const [showBlocks, setShowBlocks] = useState(false);
   const [nav, setNavState] = useState<NavSettings>(loadNav);
@@ -339,34 +325,6 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const playTelephone = async () => {
-    const roots = selectedRuns.filter((r) => !String(r.depth_source ?? "").startsWith("none"));
-    setError(null);
-    try {
-      for (const [i, r] of roots.entries()) {
-        setPlaying(`${modelLabel(r)} (${i + 1}/${roots.length})…`);
-        const chain = await api.telephone(r.id, teleSteps, teleYaw);
-        setChains((c) => ({ ...c, [r.id]: chain }));
-      }
-      setGeneration(teleSteps);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setPlaying(null);
-    }
-  };
-  const maxGeneration = Math.max(0, ...selected.map((id) => chains[id]?.length ?? 0));
-  // Loop through the generations, original included.
-  useEffect(() => {
-    if (!looping || maxGeneration === 0) return;
-    const t = setInterval(() => setGeneration((g) => (g + 1) % (maxGeneration + 1)), 1200);
-    return () => clearInterval(t);
-  }, [looping, maxGeneration]);
-  const shownGeneration = (id: string) => {
-    const chain = chains[id];
-    return generation > 0 && chain?.length ? chain[Math.min(generation, chain.length) - 1] : undefined;
   };
 
   const toggle = (id: string, on: boolean) =>
@@ -413,7 +371,7 @@ export default function App() {
           <small>Tick up to {MAX_PANELS} to compare</small>
         </header>
         <ul className="history">
-          {runs.filter((r) => !r.telephone).map((r) => (
+          {runs.map((r) => (
             <li key={r.id} className={selected.includes(r.id) ? "active" : ""}>
               <input
                 type="checkbox"
@@ -477,9 +435,8 @@ export default function App() {
           {selected.length ? (
             selected.map((id) => (
               <Panel
-                key={id /* stays mounted across generations, so the synced camera is kept */}
-                id={shownGeneration(id)?.id ?? id}
-                generation={shownGeneration(id)}
+                key={id}
+                id={id}
                 blockSize={showBlocks ? mcSize : undefined}
                 mode={mode}
                 pointSize={pointSize}
@@ -497,25 +454,7 @@ export default function App() {
 
         {selectedRuns.length > 0 && (
           <div className="strips">
-            <div className="telephone" aria-label="Telephone game">
-              <strong>Telephone game</strong>
-              <span className="hint">render {teleYaw}° to the side, feed it back to the model, repeat</span>
-              <Slider label="Steps" min={1} max={12} step={1} value={teleSteps} unit="" onChange={setTeleSteps} />
-              <Slider label="Turn" min={-30} max={30} step={5} value={teleYaw} unit="°" onChange={setTeleYaw} />
-              <button className="primary" onClick={playTelephone} disabled={!!playing || !selectedRuns.length}>
-                {playing ? `Playing ${playing}` : "Play"}
-              </button>
-              {maxGeneration > 0 && (
-                <div className="group">
-                  <Slider label="Generation" min={0} max={maxGeneration} step={1} value={generation} unit="" onChange={(g) => { setLooping(false); setGeneration(g); }} />
-                  <label className="check">
-                    <input type="checkbox" checked={looping} onChange={(e) => setLooping(e.target.checked)} />
-                    Loop
-                  </label>
-                </div>
-              )}
-            </div>
-            <div className="telephone" aria-label="Minecraft build">
+            <div className="strip-bar" aria-label="Minecraft build">
               <strong>Minecraft build</strong>
               <span className="hint">looks like the image from one spot: the original camera</span>
               <Slider label="Size" min={32} max={256} step={16} value={mcSize} unit=" blocks" onChange={setMcSize} />
@@ -524,7 +463,7 @@ export default function App() {
                 Show as blocks
               </label>
             </div>
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} chain={chains[r.id]} blockSize={mcSize} />)}
+            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} blockSize={mcSize} />)}
           </div>
         )}
       </main>
