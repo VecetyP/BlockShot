@@ -1,5 +1,5 @@
 {
-  "name": "pointcloud-viewer",
+  "name": "blockshot-web",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.14.0",

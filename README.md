@@ -1,9 +1,9 @@
-# Blockshot
+# BlockShot
 
 **Turn any image into a Minecraft build that looks exactly like it from one spot.**
 
 Drop in a screenshot, a photo or a painting. A monocular 3D model rebuilds the scene as a point
-cloud, Blockshot turns that cloud into blocks, and you get a WorldEdit schematic. Paste it, stand
+cloud, BlockShot turns that cloud into blocks, and you get a WorldEdit schematic. Paste it, stand
 where the camera was, and the build lines up with the original image. Walk away, and it falls apart
 into the façade it really is.
 
@@ -101,7 +101,7 @@ Notes:
 
 ## Also in the box: a single-image 3D lab
 
-Blockshot grew out of a playground for studying how these models handle images, especially optical
+BlockShot grew out of a playground for studying how these models handle images, especially optical
 illusions and impossible figures. All of that is still here.
 
 ![comparison view](docs/comparison.jpg)
@@ -165,4 +165,4 @@ uv run python tools/minecraft_palette.py <minecraft.jar> # re-measure the block 
 The code is [MIT](LICENSE). Model weights keep their own licences (see [Models](#models)); some,
 such as VGGT-1B and Depth Anything Base/Large, are non-commercial.
 
-Minecraft is a trademark of Mojang Studios. Blockshot is not affiliated with Mojang or Microsoft.
+Minecraft is a trademark of Mojang Studios. BlockShot is not affiliated with Mojang or Microsoft.

@@ -337,7 +337,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <h1 className="brand">Point Cloud Playground</h1>
+        <h1 className="brand">BlockShot</h1>
         <section
           className={`drop ${file ? "has-file" : ""}`}
           onDragOver={(e) => e.preventDefault()}

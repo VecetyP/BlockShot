@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 from . import store  # noqa: E402
 from .models import registry  # noqa: E402
 
-app = FastAPI(title="Point Cloud Playground")
+app = FastAPI(title="BlockShot")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
