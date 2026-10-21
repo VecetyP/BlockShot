@@ -92,7 +92,11 @@ kbd {
 .models { border: 1px solid var(--line); border-radius: var(--radius-lg); margin: 0; padding: 8px 12px 10px; display: grid; gap: 6px; }
 .models legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
 .models label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-.models .model-name { flex: 1; }
+.models .model-name { flex: 1; display: inline-flex; align-items: center; gap: 6px; }
+.badge {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em; line-height: 1; padding: 3px 6px;
+  border-radius: 999px; color: var(--accent); background: var(--accent-soft);
+}
 .error { color: var(--danger); margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 
 .history-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 4px; }

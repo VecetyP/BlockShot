@@ -4,6 +4,7 @@ import { COLOR_MODES, FIELD_MODES, type ColorMode } from "./colors";
 import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
 
 const MAX_PANELS = 4;
+const RECOMMENDED_MODEL = "moge"; // the best-looking builds in practice; listed first and picked by default
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
 
 const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1, pan: 1 };
@@ -306,8 +307,9 @@ export default function App() {
 
   useEffect(() => {
     api.getModels().then((m) => {
-      setModels(m);
-      setPicked(m.slice(0, 1).map((x) => x.name));
+      const sorted = [...m].sort((a, b) => Number(b.name === RECOMMENDED_MODEL) - Number(a.name === RECOMMENDED_MODEL));
+      setModels(sorted);
+      setPicked(sorted.slice(0, 1).map((x) => x.name));
     }).catch((e) => setError(`backend unreachable: ${e}`));
     refreshRuns();
   }, [refreshRuns]);
@@ -356,7 +358,10 @@ export default function App() {
                 checked={picked.includes(m.name)}
                 onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.name] : p.filter((x) => x !== m.name)))}
               />
-              <span className="model-name">{m.name}</span>
+              <span className="model-name">
+                {m.name}
+                {m.name === RECOMMENDED_MODEL && <span className="badge">Recommended</span>}
+              </span>
               <small>{m.scale_kind}{m.loaded ? " · loaded" : ""}</small>
             </label>
           ))}

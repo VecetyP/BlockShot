@@ -1,148 +1,163 @@
-# Image → 3D Point Cloud Playground
+# Blockshot
 
-Run single-image depth/geometry models on images (especially impossible figures), cache the
-outputs in one uniform format, and inspect them.
+**Turn any image into a Minecraft build that looks exactly like it from one spot.**
 
-## Setup
+Drop in a screenshot, a photo or a painting. A monocular 3D model rebuilds the scene as a point
+cloud, Blockshot turns that cloud into blocks, and you get a WorldEdit schematic. Paste it, stand
+where the camera was, and the build lines up with the original image. Walk away, and it falls apart
+into the façade it really is.
 
-Requires [uv](https://docs.astral.sh/uv/). Torch is pulled from the CUDA 13.0 wheel index (NVIDIA driver 580+);
-the device is picked at startup (CUDA → MPS → CPU).
+![A Minecraft screenshot, its block build seen from the original camera, and the same build from 30° to the side](docs/minecraft.jpg)
+
+*Left: the input screenshot. Middle: the generated build, seen from the input camera. Right: the same
+build from 30° to the side.*
+
+## Quick start
+
+You need [uv](https://docs.astral.sh/uv/), Node.js, and ideally an NVIDIA GPU. It was developed on
+an RTX 3080 Laptop (16 GB); everything also runs on CPU, slowly. PyTorch comes from the CUDA 13.0
+wheel index, which needs NVIDIA driver 580 or newer.
 
 ```bash
 uv sync
-uv run python samples/generate.py   # draws penrose_triangle.png, necker_cube.png
 ```
 
-## Use
+**Windows:** double-click **`run.bat`**. It starts the backend (:8000) and the web app (:5173) in two
+windows and opens http://localhost:5173. Close both windows to stop.
 
-On Windows, double-click **`run.bat`**. It starts the backend (:8000) and the viewer (:5173), each in
-its own window, and opens http://localhost:5173. Close the two windows to stop the servers.
-
-Manually:
+**Anywhere else:**
 
 ```bash
-uv run python -m backend.cli predict samples/penrose_triangle.png --model depth_anything
 uv run uvicorn backend.app:app --port 8000
-uv run pytest
+cd frontend && corepack pnpm install && corepack pnpm dev   # http://localhost:5173
 ```
 
-Viewer (needs Node and pnpm; `corepack pnpm` works without a global install):
+Model weights download from Hugging Face on first use.
+
+## Make a build
+
+1. Drop an image on the drop zone, keep **moge** ticked (recommended), and press **Run**.
+2. In the **Minecraft build** bar under the 3D view, pick a **Size**: blocks along the build's
+   longest side, 32–256.
+3. Tick **Show as blocks** to preview the build in 3D, and press **Snap to input camera** to see it
+   from the spot where it matches.
+4. Press **Download .schem** on the run's card.
+
+Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
+
+1. Put the file in `.minecraft/config/worldedit/schematics/` (singleplayer mod) or the server's
+   `plugins/WorldEdit/schematics/`.
+2. Stand where the picture should be seen from, and face south: `/tp @s ~ ~ ~ 0 0`.
+3. `//schem load <file name>`, then `//paste`. The paste is offset so the image's camera lands at
+   your eyes.
+4. Set **Options → FOV** to the number on the card (the camera's vertical field of view), turn
+   **FOV Effects** off, and press **F1** to hide the HUD.
+
+Schematics use Minecraft 1.16.5 block data and load in 1.16 and every newer version.
+
+## How a build is made
+
+`backend/minecraft.py`:
+
+1. **Point cloud.** The chosen model predicts a 3D point for every pixel, in the camera's frame.
+2. **Axes.** The cloud is turned into Minecraft's axes with the camera facing south (+z), so the
+   image's right side goes west.
+3. **Blocks.** Points are snapped to a grid sized so the longest side has *Size* blocks. The
+   outermost 0.5% of points on each axis are ignored, so stray points don't shrink the build.
+4. **Colours.** Each block's colour is the mean of its points in linear light. The block placed is
+   the palette entry closest in CIELAB, a perceptual colour space.
+5. **Schematic.** A Sponge v2 `.schem` with WorldEdit's paste offset set from the camera position,
+   and the vertical FOV from the model's estimated camera.
+
+The palette (`backend/minecraft_palette.json`) holds 107 blocks: all concrete, wool, terracotta and
+planks, plus stones, bricks, storage blocks and others that look the same on every face and don't
+fall, glow, or let light through. Each entry is the mean colour of the block's texture, measured from
+a Minecraft jar by `tools/minecraft_palette.py`. Only those numbers are in this repo, no game files.
+
+**What to expect.** A build is a single-view sculpture: surfaces are one block thick, and nothing
+exists behind what the camera saw. The image's own lighting is baked into the block choice, and
+Minecraft shades block faces again, so faces can come out slightly darker in game.
+
+## Models
+
+| Model | Weights | Output | Licence | VRAM (weights / peak) |
+|---|---|---|---|---|
+| **`moge`** · *recommended* | Ruicheng/moge-3-vitl (MoGe 3.0.0) | metric point map, camera intrinsics, mask, normals | MIT (DINOv2 parts Apache-2.0) | 1.4 / 2.4 GB |
+| `depth_anything` | Depth-Anything-V2-Small-hf (`DEPTH_ANYTHING_SIZE=Base\|Large`) | relative depth; assumes a 60° camera | Small: Apache-2.0; Base/Large: CC-BY-NC-4.0 | 0.1 / 0.2 GB |
+| `vggt` | facebook/VGGT-1B, single image | depth, confidence, intrinsics | weights non-commercial | 4.7 / 7.0 GB |
+| `marigold_normals` | prs-eth/marigold-normals-v1-1 | surface normals only (no depth, so no build) | CreativeML Open RAIL++-M | 2.4 / 3.8 GB |
+
+MoGe gives the best-looking builds: it estimates the real camera, so the FOV and proportions come out
+right, and it masks out sky and empty background. All four models loaded together use about 10.6 GB
+of VRAM.
+
+Notes:
+
+- Depth Anything predicts disparity; `depth = 1/disparity`, and the raw disparity is kept.
+- MoGe's refinement stage needs CUDA (Triton kernels). On CPU it runs without refinement, and that
+  setting is part of the run's cache key.
+- VGGT's depth confidence is stored raw and mapped to `1 − 1/conf` for display.
+- `vggt`'s `numpy<2` pin is overridden in `pyproject.toml`; it runs fine on numpy 2.
+
+## Also in the box: a single-image 3D lab
+
+Blockshot grew out of a playground for studying how these models handle images, especially optical
+illusions and impossible figures. All of that is still here.
+
+![comparison view](docs/comparison.jpg)
+
+- **Exact camera.** The 3D view projects through each run's own intrinsics, so **Snap to input
+  camera** reproduces the input pixel for pixel.
+- **Comparison grid.** Tick up to four runs in History. Orbiting one panel orbits all of them;
+  poses are shared in units of each cloud's median depth, so metric and relative models stay aligned.
+- **Navigation.** Drag to orbit, right-drag to pan, scroll to zoom. **W/A/S/D** fly, **Q/E**
+  down/up, **Shift** faster, with sensitivity sliders for each.
+- **Colour modes:** RGB, depth, confidence, discontinuity, curl, residual.
+- **2D strip:** input, depth, confidence, normals and analysis maps. Click any image to enlarge it.
+- **Integrability** (`backend/analysis/integrability.py`): how much of a model's predicted normal
+  field no real surface could produce.
+  - It uses a Helmholtz–Hodge split (a Poisson solve) on the perspective-exact gradient
+    `∇log z = −(nₓ, n_y)/(n·r)`, where r is the pixel's viewing ray.
+  - Depth-derived gradients score 0 by construction.
+  - A synthetic sphere scores 0.05%, and a hand-built Penrose-triangle normal field scores 22%,
+    spread around the loop.
+- **Tears** (`discontinuity.py`): depth jumps scaled by distance, with the top 20 marked in 3D and on
+  the image.
+- **Off-axis renders** (`offaxis.py`): the cloud re-rendered at ±5°, ±15° and ±30°, to watch an
+  illusion fall apart as you leave its viewpoint.
+- **Reprojection check** (`reproject.py`): 0.000 px for every depth model.
+
+`samples/generate.py` draws a Penrose triangle and a Necker cube; `samples/` also has a few rendered
+3D figures as controls. A CLI writes runs too:
 
 ```bash
-cd frontend && corepack pnpm install && corepack pnpm dev   # http://localhost:5173, proxies /api to :8000
+uv run python -m backend.cli predict samples/penrose_triangle.png --model moge
 ```
 
-The viewer renders with a projection built from the run's intrinsics, so **Snap to input camera**
-(camera at the origin looking down +Z) reproduces the input image pixel-for-pixel. Color modes:
-RGB, depth, confidence (when the model has it), discontinuity.
-
-Navigation: drag to orbit, right-drag to pan, scroll to zoom. **W/A/S/D** fly, **Q/E** down/up,
-**Shift** faster (keys drive the viewer under the mouse; in the grid the others follow). The second
-toolbar row sets move, orbit, zoom and pan sensitivity, remembered per browser. Move speed is in
-median-depths per second, so it feels the same for metric and relative models.
-
-Each run lands in `runs/<image sha>_<model>_<version hash>/` with `prediction.npz`,
-`points.ply` (RGB-colored, camera frame: +X right, +Y down, +Z forward), `input.png` and
-`meta.json`. Re-running the same image and model hits the cache; pass `--force` to recompute.
-
-## Analysis
-
-Computed on first request per run and cached in `runs/<id>/analysis.json` (+ `analysis.npz`).
-`GET /runs/{id}/analysis` returns the summary; each panel shows it in its header.
-
-- **Integrability** (`backend/analysis/integrability.py`), the core research signal. For each run it
-  builds a gradient field of log-depth twice: *native* from the model's normals, *derived* from its
-  depth. It then computes the curl and a Helmholtz–Hodge split: a Poisson solve with Neumann
-  boundaries over the mask, via `scipy.sparse`. It reports the non-integrable residual energy as a
-  fraction of the total.
-  - Deviation from the plan: the native gradient uses the perspective-exact
-    `∇log z = −(n_x, n_y)/(n·r)` (r = the pixel's ray) rather than the orthographic `−n_x/n_z`. Only
-    the former is curl-free for every real surface under a perspective camera; near the optical axis
-    they agree.
-  - Depth-derived gradients are integrable by construction: their residual is 0 to solver precision.
-  - Curl and residual maps are stored relative to the run's RMS gradient and shown on a fixed scale,
-    so ~0 really looks like 0 and runs compare directly. Viewer modes: **curl** (signed) and
-    **residual**.
-  - Tests: an exact perspective sphere gives 0.05% residual. The hand-built Penrose normal field
-    (`tests/fixtures/fields.py`) gives 22%, spread over all three bars of the loop (33 / 27 / 40%),
-    even though every local join is a valid fold.
-- **Reprojection** (`reproject.py`): mean px error of points projected through the run's intrinsics.
-  It is 0.000 px for every depth model.
-- **Discontinuity / tears** (`discontinuity.py`): the largest 3D distance to a 4-neighbor divided by
-  depth, plus the top 20 tears found by greedy non-max suppression (8 px). The **Tears** toggle marks
-  them in 3D and on the input, and lists their pixel coordinates.
-- **Off-axis renders** (`offaxis.py`): the cloud re-rendered through the same intrinsics after
-  rotating it ±5°, ±15° and ±30° about the vertical axis through its centroid. Saved to
-  `runs/<id>/offaxis/yaw_±NN.png` (`POST /runs/{id}/offaxis`, or the button in the strip).
-
-First numbers on `samples/penrose_triangle.png`: MoGe-3 normals leave 6.0% non-integrable and
-Marigold normals 11.1%. Depth Anything, VGGT and MoGe depth all give 0% (as they must).
-
-## Minecraft build
-
-Turns a run into a Minecraft build that looks like the input image from one spot, the original
-camera. Set **Size** (blocks along the longest side) in the bar above the strips. **Show as blocks**
-previews the build as cubes in every panel, and each strip has **Download .schem** with
-instructions:
-
-1. Put the file in `.minecraft/config/worldedit/schematics/` (WorldEdit mod) or a server's
-   `plugins/WorldEdit/schematics/`.
-2. Stand where the photo was taken from and face south: `/tp @s ~ ~ ~ 0 0`.
-3. `//schem load <name>`, then `//paste`. The paste offset puts the photo's camera at your eyes.
-4. Set FOV to the value the card shows (the input camera's vertical field of view), turn FOV
-   Effects off, and press F1.
-
-How it works (`backend/minecraft.py`):
-
-- The cloud is snapped to a block grid in Minecraft's axes, with the camera facing south. The
-  outermost 0.5% of points on each axis are ignored when sizing the build.
-- Each block's colour is the mean of its points in linear light. The block is the closest palette
-  entry in CIELAB.
-- The output is a Sponge v2 schematic (DataVersion 2586, Minecraft 1.16.5; newer versions upgrade
-  it on load).
-- The palette (`backend/minecraft_palette.json`) holds the mean texture colours of 107 full,
-  same-on-every-face, non-falling, non-glowing blocks. `tools/minecraft_palette.py` measures them
-  from a Minecraft jar you own; only the numbers are stored.
-- It's a single-view build: surfaces are one block thick and nothing is built behind what the camera
-  saw.
+Each run is cached in `runs/<image sha>_<model>_<version hash>/` as `prediction.npz`, `points.ply`
+(RGB, camera frame: +X right, +Y down, +Z forward), `input.png` and `meta.json`.
 
 ## API
 
 | Route | |
 |---|---|
-| `GET /models` | models, load status, device, scale kind |
-| `POST /models/unload?name=` | free a model (or all) |
+| `GET /models` · `POST /models/unload?name=` | models, load status, device · free GPU memory |
 | `POST /predict` | multipart `image`, `models` (repeatable), `force` |
-| `GET /runs`, `GET /runs/{id}` | run metadata |
-| `GET /runs/{id}/points.bin?stride=` | `uint32 N, has_conf`, `f32 xyz[3N]`, `f32 discontinuity[N]`, `f32 conf[N]` (if any), `u8 rgb[3N]`; ≤500k points |
-| `GET /runs/{id}/maps/{depth,confidence,normals,discontinuity,curl,residual}.png` | display-normalized 2D maps |
-| `GET /runs/{id}/analysis?force=` | reprojection, integrability, top tears |
-| `GET /runs/{id}/field/{curl,residual}.bin` | `f32[N]` per point, same order as `points.bin` |
-| `GET /runs/{id}/minecraft.{json,bin,schem}?size=` | Minecraft build: summary, block preview, Sponge schematic |
-| `POST /runs/{id}/offaxis` | renders the ±5/15/30° views, returns their URLs |
+| `GET /runs` · `GET /runs/{id}` | run metadata |
+| `GET /runs/{id}/minecraft.json?size=` | build summary: size, block count, FOV, paste offset |
+| `GET /runs/{id}/minecraft.schem?size=` | Sponge v2 schematic |
+| `GET /runs/{id}/minecraft.bin?size=` | block preview for the viewer |
+| `GET /runs/{id}/points.bin?stride=` | point cloud for the viewer (≤ 500k points) |
+| `GET /runs/{id}/maps/{kind}.png` | depth, confidence, normals, discontinuity, curl, residual |
+| `GET /runs/{id}/analysis` · `GET /runs/{id}/field/{curl,residual}.bin` | integrability, reprojection, tears · per-point fields |
+| `POST /runs/{id}/offaxis` | ±5/15/30° renders |
 
-## Models
+## Development
 
-![comparison view](docs/comparison.jpg)
+```bash
+uv run pytest                                            # model tests download weights on first run
+uv run python tools/readme_figure.py <run id> [size]     # regenerate docs/minecraft.jpg
+uv run python tools/minecraft_palette.py <minecraft.jar> # re-measure the block palette
+```
 
-Tick up to four runs in History (or run several models at once) for the comparison grid. Orbiting
-one panel orbits all of them; poses are shared in units of each cloud's median depth, so metric and
-relative models stay aligned. Each panel has its own Snap.
-
-VRAM measured on an RTX 3080 Laptop (16 GB), CUDA. All four resident ≈ 10.6 GB.
-
-| Name | Weights | License | Output | Weights / peak VRAM |
-|---|---|---|---|---|
-| `depth_anything` | Depth-Anything-V2-Small-hf (`DEPTH_ANYTHING_SIZE=Base\|Large`) | Small: Apache-2.0; Base/Large: CC-BY-NC-4.0 | affine-invariant disparity, assumed 60° FOV | 0.1 / 0.2 GB |
-| `moge` | Ruicheng/moge-3-vitl (MoGe 3.0.0) | MIT (DINOv2 parts Apache-2.0) | metric pointmap, intrinsics, mask, normals | 1.4 / 2.4 GB |
-| `marigold_normals` | prs-eth/marigold-normals-v1-1 (4 steps, ensemble 3) | CreativeML Open RAIL++-M | normals + uncertainty only (points are a placeholder plane) | 2.4 / 3.8 GB |
-| `vggt` | facebook/VGGT-1B, single image | weights non-commercial; code see repo | depth, confidence, intrinsics (camera head) | 4.7 / 7.0 GB |
-
-Notes:
-- Depth Anything predicts disparity. `depth = 1/disparity`; raw disparity is kept as `raw_disparity`.
-- MoGe-3's refinement stage needs CUDA (Triton kernels via flex-gemm). On CPU it runs with
-  `refine_steps=0`; the setting is part of the cache key and `meta.refine_steps`.
-- Marigold normals are converted from (right, up, toward viewer) to the OpenCV camera frame.
-- VGGT's `depth_conf` (≥ 1, unbounded) is stored raw as `raw_depth_conf`; `confidence = 1 - 1/depth_conf`.
-- PyTorch comes from the CUDA 13.0 wheel index (MoGe requires it); `vggt`'s `numpy<2` pin is overridden.
-- DUSt3R/MASt3R (optional in the plan) are not included.
+Minecraft is a trademark of Mojang Studios. Blockshot is not affiliated with Mojang or Microsoft.
