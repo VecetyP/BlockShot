@@ -80,5 +80,31 @@ export const getField = async (id: string, kind: string) => {
   return r.ok ? new Float32Array(await r.arrayBuffer()) : null;
 };
 
-export const renderOffAxis = (id: string) =>
-  fetch(`${API}/runs/${id}/offaxis`, { method: "POST" }).then(json<string[]>).then((u) => u.map((x) => API + x));
+export type FillOrder = "slope" | "curvature";
+export type FillSettings = { on: boolean; reach: number; order: FillOrder; tint: boolean }; // reach: % of image width
+export type FillCloud = { n: number; xyz: Float32Array; rgb: Uint8Array };
+
+// Layout documented in backend/store.py:fill_bin.
+export async function getFill(id: string, reach: number, order: FillOrder): Promise<FillCloud> {
+  const r = await fetch(`${API}/runs/${id}/fill.bin?reach=${reach}&order=${order}`);
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  const buf = await r.arrayBuffer();
+  const n = new Uint32Array(buf, 0, 1)[0];
+  return { n, xyz: new Float32Array(buf, 4, n * 3), rgb: new Uint8Array(buf, 4 + n * 12, n * 3) };
+}
+
+export type OffAxisView = {
+  yaw: number;
+  gaps: string; // render with gaps marked
+  filled?: string; // same view with the fill added
+  gap_px: number;
+  other_hidden_px: number;
+  covered?: number; // share of gap pixels the fill covers
+};
+
+export const renderOffAxis = (id: string, fill?: { reach: number; order: FillOrder }) =>
+  fetch(`${API}/runs/${id}/offaxis${fill ? `?reach=${fill.reach}&order=${fill.order}` : ""}`, { method: "POST" })
+    .then(json<OffAxisView[]>)
+    .then((views) =>
+      views.map((v) => ({ ...v, gaps: API + v.gaps, filled: v.filled && API + v.filled })),
+    );

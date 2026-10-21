@@ -2,7 +2,7 @@ import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import type { Cloud, RunMeta, Tear } from "./api";
+import type { Cloud, FillCloud, RunMeta, Tear } from "./api";
 import { colorize, type ColorMode } from "./colors";
 
 type Props = {
@@ -15,6 +15,8 @@ type Props = {
   snapKey: number;
   sync?: OrbitSync;
   nav: NavSettings;
+  fill?: FillCloud | null; // invented points behind occluders
+  tintFill?: boolean;
 };
 
 /**
@@ -96,6 +98,33 @@ function Points({ cloud, mode, field, pointSize }: Pick<Props, "cloud" | "mode" 
     g.setAttribute("color", new THREE.BufferAttribute(colorize(cloud, mode, field), 3));
     return g;
   }, [positions, cloud, mode, field]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <points frustumCulled={false} geometry={geometry}>
+      <pointsMaterial vertexColors size={pointSize} sizeAttenuation={false} />
+    </points>
+  );
+}
+
+/** Gap-fill points, optionally tinted so it's obvious what was invented rather than observed. */
+function FillPoints({ fill, tint, pointSize }: { fill: FillCloud; tint: boolean; pointSize: number }) {
+  const geometry = useMemo(() => {
+    const p = new Float32Array(fill.xyz.length);
+    const c = new Float32Array(fill.xyz.length);
+    for (let i = 0; i < fill.n; i++) {
+      p[3 * i] = fill.xyz[3 * i];
+      p[3 * i + 1] = -fill.xyz[3 * i + 1];
+      p[3 * i + 2] = -fill.xyz[3 * i + 2];
+      for (let k = 0; k < 3; k++) {
+        const v = fill.rgb[3 * i + k] / 255;
+        c[3 * i + k] = tint ? 0.35 * v + 0.65 * [0, 0.86, 1][k] : v;
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(p, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(c, 3));
+    return g;
+  }, [fill, tint]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <points frustumCulled={false} geometry={geometry}>
@@ -235,7 +264,7 @@ function Snap({ target, snapKey }: { target: number; snapKey: number }) {
   return null;
 }
 
-export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav }: Props) {
+export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav, fill, tintFill }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
@@ -243,6 +272,7 @@ export default function Viewer({ cloud, meta, mode, field, tears, pointSize, sna
       <color attach="background" args={["#111317"]} />
       <IntrinsicsProjection meta={meta} near={z.min * 0.01} far={z.max * 100} />
       <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />
+      {fill && fill.n > 0 && <FillPoints fill={fill} tint={!!tintFill} pointSize={pointSize} />}
       {tears && tears.length > 0 && <TearMarkers tears={tears} />}
       <OrbitControls makeDefault enableDamping={false} rotateSpeed={nav.rotate} zoomSpeed={nav.zoom} panSpeed={nav.pan} />
       <WasdControls speed={nav.move} scale={z.median} />

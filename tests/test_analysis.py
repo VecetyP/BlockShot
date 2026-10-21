@@ -28,7 +28,7 @@ def test_top_tears_sit_on_the_step():
 def test_offaxis_at_zero_yaw_reproduces_the_input():
     pts, K, mask = _scene()
     rgb = np.random.default_rng(0).integers(0, 256, (H, W, 3), dtype=np.uint8)
-    out = offaxis.render(pts, rgb, mask, K, 0)
+    out, _ = offaxis.render(pts, rgb, mask, K, 0)
     same = (out == rgb).all(-1)
     same[:, 32] = True  # the near side's 2x2 splats correctly cover the far side of the step
     assert same.mean() > 0.99

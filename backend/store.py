@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .analysis import fill as gapfill
 from .analysis import integrability, offaxis
 from .analysis.discontinuity import discontinuity, top_tears
 from .analysis.reproject import reprojection_error
@@ -250,16 +251,91 @@ def field_bin(rid: str, kind: str, stride: int | None = None) -> bytes | None:
     return x[sl][m].astype("<f4").tobytes()
 
 
-def offaxis_renders(rid: str) -> list[str]:
-    """Renders at each yaw in offaxis.YAWS into runs/<id>/offaxis/, cached; returns file names."""
-    d = RUNS / rid / "offaxis"
-    names = [f"yaw_{y:+03d}.png" for y in offaxis.YAWS]
-    if not all((d / n).exists() for n in names):
+FILL_ORDERS = {"slope": 2, "curvature": 3}
+GAP_REACH = 256  # px on the analysis grid: how far behind an occluder edge hidden space is looked for
+DEFAULT_REACH = 8  # % of image width
+
+
+def _rgb(rid: str) -> np.ndarray:
+    return np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
+
+
+def fill_points(rid: str, reach: int, order: str) -> tuple[np.ndarray, np.ndarray]:
+    """Gap fill for a run: (xyz (N,3) camera frame, rgb (N,3)), cached per (reach, order).
+    `reach` is how far behind an occluding edge to fill, in percent of the image width."""
+    path = RUNS / rid / f"fill_{order}_{reach}.npz"
+    if not path.exists():
         with _analysis_lock:
-            d.mkdir(exist_ok=True)
-            a = load_arrays(rid)
-            rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
-            for y, n in zip(offaxis.YAWS, names):
-                img = Image.fromarray(offaxis.render(a["points"], rgb, a["mask"], a["intrinsics"], y))
-                _atomic(d / n, lambda f: img.save(f, format="PNG"))
-    return names
+            if not path.exists():
+                a = load_arrays(rid)
+                depth, mask, K = a["depth"], a["mask"], a["intrinsics"]
+                # Large images are filled on the same subsampled grid as the analysis, to bound memory.
+                s, sl, K2 = _analysis_grid(*mask.shape, K)
+                f = gapfill.fill(depth[sl], _rgb(rid)[sl], mask[sl], reach / 100 * mask.shape[1] / s, FILL_ORDERS[order])
+                x = (f.cols + 0.5 - K2[0, 2]) / K2[0, 0] * f.depth
+                y = (f.rows + 0.5 - K2[1, 2]) / K2[1, 1] * f.depth
+                xyz = np.stack([x, y, f.depth], -1).astype(np.float32)
+                _atomic(path, lambda fh: np.savez_compressed(fh, xyz=xyz, rgb=f.rgb))
+    with np.load(path) as z:
+        return z["xyz"], z["rgb"]
+
+
+def fill_bin(rid: str, reach: int, order: str) -> bytes:
+    """uint32 N, float32 xyz[N*3] (camera frame, like points.bin), uint8 rgb[N*3]."""
+    xyz, rgb = fill_points(rid, reach, order)
+    return np.uint32(len(xyz)).tobytes() + xyz.astype("<f4").tobytes() + rgb.astype(np.uint8).tobytes()
+
+
+def offaxis_renders(rid: str, reach: int | None = None, order: str | None = None) -> list[dict]:
+    """Renders at each yaw in offaxis.YAWS, cached in runs/<id>/offaxis/<variant>/.
+
+    Renders mark what the input camera could not see: magenta where the view looks at hidden surface
+    behind an occluding edge, within the fill's reach (what the fill is for), violet for other hidden
+    space (an object's back side, or far behind an edge). With a fill, a second render per yaw adds
+    the fill points, and `covered` is the share of the magenta gap pixels they cover."""
+    tag = f"{order}_{reach}" if order else "nofill"
+    d = RUNS / rid / "offaxis" / tag
+    stats_path = d / "stats.json"
+    if not stats_path.exists():
+        with _analysis_lock:
+            if not stats_path.exists():
+                d.mkdir(parents=True, exist_ok=True)
+                a = load_arrays(rid)
+                # Large images render on the analysis grid (<= MAX_ANALYSIS_PIXELS): same 3D points, fewer pixels.
+                s, sl, K = _analysis_grid(*a["mask"].shape, a["intrinsics"])
+                pts, mask, depth, rgb = a["points"][sl], a["mask"][sl], a["depth"][sl], _rgb(rid)[sl]
+                occ_all = gapfill.occlusion(depth, mask, reach=GAP_REACH)
+                # Without a fill, the default reach still splits "behind an edge" from other hidden space.
+                reach_px = (reach or DEFAULT_REACH) / 100 * mask.shape[1]
+                occ_edge = gapfill.occlusion(depth, mask, reach=reach_px)
+                cen = offaxis.centroid(pts, mask)
+                extra = None
+                if order:
+                    _analysis_lock.release()  # fill_points takes the lock itself
+                    try:
+                        extra = fill_points(rid, reach, order)
+                    finally:
+                        _analysis_lock.acquire()
+                stats = []
+                for y in offaxis.YAWS:
+                    img, hit = offaxis.render(pts, rgb, mask, K, y)
+                    hidden, gap = offaxis.gaps(depth, mask, K, [occ_all, occ_edge], cen, y, hit)
+                    other = hidden & ~gap
+                    img[other], img[gap] = offaxis.HIDDEN_COLOR, offaxis.GAP_COLOR
+                    entry = {"yaw": y, "gaps": f"yaw_{y:+03d}.png", "gap_px": int(gap.sum()), "other_hidden_px": int(other.sum())}
+                    _atomic(d / entry["gaps"], lambda fh, im=img: Image.fromarray(im).save(fh, format="PNG"))
+                    if extra is not None:
+                        img2, hit2 = offaxis.render(pts, rgb, mask, K, y, extra)
+                        hit2 = offaxis.closed(hit2)
+                        img2[other & ~hit2], img2[gap & ~hit2] = offaxis.HIDDEN_COLOR, offaxis.GAP_COLOR
+                        entry["filled"] = f"yaw_{y:+03d}_filled.png"
+                        entry["covered"] = float((gap & hit2).sum() / gap.sum()) if gap.any() else 1.0
+                        _atomic(d / entry["filled"], lambda fh, im=img2: Image.fromarray(im).save(fh, format="PNG"))
+                    stats.append(entry)
+                _write_json(stats_path, stats)
+    stats = json.loads(stats_path.read_text())
+    for e in stats:
+        for k in ("gaps", "filled"):
+            if k in e:
+                e[k] = f"{tag}/{e[k]}"
+    return stats

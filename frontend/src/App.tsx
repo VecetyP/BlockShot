@@ -7,16 +7,31 @@ const MAX_PANELS = 4;
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
 
 const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1, pan: 1 };
-const NAV_KEY = "nav-settings";
+const DEFAULT_FILL: api.FillSettings = { on: false, reach: 8, order: "slope", tint: true };
 
-// A per-viewer convenience: storage can be unavailable (private window, blocked site data).
-function loadNav(): NavSettings {
+// Per-viewer conveniences: storage can be unavailable (private window, blocked site data).
+function load<T>(key: string, fallback: T): T {
   try {
-    return { ...DEFAULT_NAV, ...JSON.parse(localStorage.getItem(NAV_KEY) ?? "{}") };
+    return { ...fallback, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
   } catch {
-    return DEFAULT_NAV;
+    return fallback;
   }
 }
+
+function usePersisted<T>(key: string, fallback: T) {
+  const [value, set] = useState<T>(() => load(key, fallback));
+  const update = (patch: Partial<T>) =>
+    set((v) => {
+      const next = { ...v, ...patch };
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  return [value, update] as const;
+}
+
+const hasDepth = (run: api.RunMeta) => !String(run.depth_source ?? "").startsWith("none");
 
 function Slider(props: { label: string; min: number; max: number; step: number; value: number; unit?: string; onChange: (v: number) => void }) {
   return (
@@ -44,6 +59,7 @@ function Panel(props: {
   snapKey: number;
   sync?: OrbitSync;
   nav: NavSettings;
+  fill: api.FillSettings;
   titled: boolean;
   showTears: boolean;
 }) {
@@ -53,6 +69,7 @@ function Panel(props: {
   const [field, setField] = useState<{ kind: string; values: Float32Array | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [localSnap, setLocalSnap] = useState(0);
+  const [fill, setFill] = useState<{ key: string; cloud: api.FillCloud | null } | null>(null);
 
   useEffect(() => {
     setCloud(null);
@@ -76,6 +93,16 @@ function Panel(props: {
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
 
+  const fillKey = `${props.id}:${props.fill.reach}:${props.fill.order}`;
+  const canFill = !!meta && hasDepth(meta);
+  useEffect(() => {
+    if (!props.fill.on || !canFill || fill?.key === fillKey) return;
+    api.getFill(props.id, props.fill.reach, props.fill.order)
+      .then((cloud) => setFill({ key: fillKey, cloud }))
+      .catch(() => setFill({ key: fillKey, cloud: null }));
+  }, [props.fill.on, canFill, fillKey, fill?.key, props.id, props.fill.reach, props.fill.order]);
+  const fillCloud = props.fill.on && fill?.key === fillKey ? fill.cloud : null;
+
   return (
     <div className="panel">
       {meta && (
@@ -92,6 +119,8 @@ function Panel(props: {
               </small>
             )}
             {unavailable && <small className="warn"> · no {props.mode} for this model</small>}
+            {props.fill.on && meta && !canFill && <small className="warn"> · no depth to fill from</small>}
+            {fillCloud && <small className="stats"> · {fillCloud.n.toLocaleString()} filled points</small>}
           </span>
           {props.titled && <button onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>}
         </div>
@@ -107,6 +136,8 @@ function Panel(props: {
           snapKey={props.snapKey + localSnap}
           sync={props.sync}
           nav={props.nav}
+          fill={fillCloud}
+          tintFill={props.fill.tint}
         />
       ) : (
         <p className="empty">{error ?? "Loading…"}</p>
@@ -115,27 +146,28 @@ function Panel(props: {
   );
 }
 
-function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
+function Strip({ run, showTears, fill }: { run: api.RunMeta; showTears: boolean; fill: api.FillSettings }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
-  const [offAxis, setOffAxis] = useState<string[] | null>(null);
+  const [offAxis, setOffAxis] = useState<api.OffAxisView[] | null>(null);
   const [rendering, setRendering] = useState(false);
   useEffect(() => {
-    setOffAxis(null);
     api.getAnalysis(run.id).then((a) => setTears(a.tears)).catch(() => setTears([]));
   }, [run.id]);
+  const fillArg = fill.on ? { reach: fill.reach, order: fill.order } : undefined;
+  useEffect(() => setOffAxis(null), [run.id, fill.on, fill.reach, fill.order]); // renders depend on the fill
 
   // Normal-only models store a placeholder plane; its depth and discontinuity maps are meaningless.
-  const hasDepth = !String(run.depth_source ?? "").startsWith("none");
+  const depthOk = hasDepth(run);
   const maps = [
-    ...(hasDepth ? ["depth"] : []),
+    ...(depthOk ? ["depth"] : []),
     ...(run.has_confidence ? ["confidence"] : []),
     ...(run.has_normals ? ["normals"] : []),
-    ...(hasDepth ? ["discontinuity"] : []),
-    ...(run.has_normals || hasDepth ? ["curl", "residual"] : []),
+    ...(depthOk ? ["discontinuity"] : []),
+    ...(run.has_normals || depthOk ? ["curl", "residual"] : []),
   ];
   const renderOffAxis = () => {
     setRendering(true);
-    api.renderOffAxis(run.id).then(setOffAxis).finally(() => setRendering(false));
+    api.renderOffAxis(run.id, fillArg).then(setOffAxis).finally(() => setRendering(false));
   };
   return (
     <div className="strip">
@@ -159,14 +191,23 @@ function Strip({ run, showTears }: { run: api.RunMeta; showTears: boolean }) {
           {tears.map((t, i) => <li key={i}>({t.u}, {t.v}) <small>{t.score.toPrecision(3)}</small></li>)}
         </ol>
       )}
-      {hasDepth && (
+      {depthOk && (
         offAxis ? (
-          offAxis.map((u) => (
-            <figure key={u}><img src={u} alt="" /><figcaption>{u.match(/yaw_([+-]\d+)/)?.[1]}°</figcaption></figure>
+          offAxis.map((v) => (
+            <figure key={v.yaw} className="offaxis-view">
+              <div className="pair">
+                <img src={v.gaps} alt={`${v.yaw}° with gaps marked`} />
+                {v.filled && <img src={v.filled} alt={`${v.yaw}° with the fill`} />}
+              </div>
+              <figcaption>
+                {v.yaw > 0 ? "+" : ""}{v.yaw}°
+                {v.covered !== undefined && <> · fill covers {pct(v.covered)} of gaps</>}
+              </figcaption>
+            </figure>
           ))
         ) : (
           <button className="offaxis" onClick={renderOffAxis} disabled={rendering}>
-            {rendering ? "Rendering…" : "Off-axis renders"}
+            {rendering ? "Rendering…" : fill.on ? "Off-axis renders + fill" : "Off-axis renders"}
           </button>
         )
       )}
@@ -187,15 +228,8 @@ export default function App() {
   const [pointSize, setPointSize] = useState(2);
   const [snapKey, setSnapKey] = useState(0);
   const [showTears, setShowTears] = useState(false);
-  const [nav, setNavState] = useState<NavSettings>(loadNav);
-  const setNav = (patch: Partial<NavSettings>) =>
-    setNavState((n) => {
-      const next = { ...n, ...patch };
-      try {
-        localStorage.setItem(NAV_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+  const [nav, setNav] = usePersisted<NavSettings>("nav-settings", DEFAULT_NAV);
+  const [fill, setFill] = usePersisted<api.FillSettings>("fill-settings", DEFAULT_FILL);
   // A fresh sync object per selection, so panels from an old grid don't keep listening.
   const sync = useMemo(() => new OrbitSync(), [selected.join()]);
 
@@ -315,6 +349,27 @@ export default function App() {
           <Slider label="Pan" min={0.1} max={3} step={0.1} value={nav.pan} onChange={(pan) => setNav({ pan })} />
           <button onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
         </div>
+        <div className="toolbar nav" aria-label="Gap fill">
+          <label className="size" title="Continue hidden surfaces behind occluding edges">
+            <input type="checkbox" checked={fill.on} onChange={(e) => setFill({ on: e.target.checked })} />
+            Fill gaps
+          </label>
+          <Slider label="Reach" min={1} max={30} step={1} value={fill.reach} unit="%" onChange={(reach) => setFill({ reach })} />
+          <label className="size" title="slope keeps the hidden surface's tilt; curvature also keeps it bending (noisier)">
+            Continue
+            <select value={fill.order} onChange={(e) => setFill({ order: e.target.value as api.FillOrder })}>
+              <option value="slope">slope</option>
+              <option value="curvature">curvature</option>
+            </select>
+          </label>
+          <label className="size">
+            <input type="checkbox" checked={fill.tint} onChange={(e) => setFill({ tint: e.target.checked })} />
+            Tint filled points
+          </label>
+          <span className="hint">
+            Off-axis renders: <span className="swatch gap" /> gap behind an edge · <span className="swatch hidden" /> other hidden space
+          </span>
+        </div>
 
         <div className={`stage grid-${selected.length}`}>
           {selected.length ? (
@@ -327,6 +382,7 @@ export default function App() {
                 snapKey={snapKey}
                 sync={selected.length > 1 ? sync : undefined}
                 nav={nav}
+                fill={fill}
                 titled={selected.length > 1}
                 showTears={showTears}
               />
@@ -338,7 +394,7 @@ export default function App() {
 
         {selectedRuns.length > 0 && (
           <div className="strips">
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} />)}
+            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} fill={fill} />)}
           </div>
         )}
       </main>
