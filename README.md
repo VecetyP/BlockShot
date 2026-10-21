@@ -160,4 +160,9 @@ uv run python tools/readme_figure.py <run id> [size]     # regenerate docs/minec
 uv run python tools/minecraft_palette.py <minecraft.jar> # re-measure the block palette
 ```
 
+## License
+
+The code is [MIT](LICENSE). Model weights keep their own licences (see [Models](#models)); some,
+such as VGGT-1B and Depth Anything Base/Large, are non-commercial.
+
 Minecraft is a trademark of Mojang Studios. Blockshot is not affiliated with Mojang or Microsoft.
