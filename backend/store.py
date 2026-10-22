@@ -227,6 +227,18 @@ def score(rid: str) -> dict:
     return result
 
 
+def _retry(fn, *args):
+    """Windows refuses to rename or delete a folder while any file in it is open, and something
+    briefly is: the browser loading a run's frames, OneDrive syncing, a virus scan. Try for ~5 s."""
+    for k in range(10):
+        try:
+            return fn(*args)
+        except PermissionError:
+            if k == 9:
+                raise
+            time.sleep(0.5)
+
+
 def delete_run(rid: str) -> None:
     """Removes a run (image prediction or video scene) from disk and from the in-memory caches."""
     d = (RUNS / rid).resolve()
@@ -234,7 +246,7 @@ def delete_run(rid: str) -> None:
         raise FileNotFoundError(rid)
     with _build_lock:  # not while a build of it is being made
         _forget(rid)
-        shutil.rmtree(d)
+        _retry(shutil.rmtree, d)
 
 
 def recompute(rid: str, progress=None) -> str:
@@ -254,7 +266,7 @@ def recompute(rid: str, progress=None) -> str:
             _scenes.pop(rid, None)
         else:
             data = (old / "input.png").read_bytes()
-        old.rename(aside)
+        _retry(old.rename, aside)
     try:
         if frames is not None:
             s = video.Settings(**{**meta.get("settings", {}), "geometry": video.Settings.geometry})
@@ -274,11 +286,11 @@ def recompute(rid: str, progress=None) -> str:
             set_above(new, bool(meta.get("above")))
     except BaseException:
         if not old.exists():
-            aside.rename(old)
+            _retry(aside.rename, old)
         raise
     if (aside / TRUTH_FILE).exists():  # a playground recording keeps its ground truth
         attach_truth(new, json.loads((aside / TRUTH_FILE).read_text()))
-    shutil.rmtree(aside)
+    _retry(shutil.rmtree, aside)
     return new
 
 
