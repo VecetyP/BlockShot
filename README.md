@@ -167,10 +167,10 @@ illusions and impossible figures. All of that is still here.
 
 - **Exact camera.** The 3D view projects through each run's own intrinsics, so **Snap to input
   camera** reproduces the input pixel for pixel.
-- **Comparison grid.** Tick up to four runs in History. Orbiting one panel orbits all of them;
+- **Comparison grid.** Tick up to four runs in History. Moving in one panel moves all of them;
   poses are shared in units of each cloud's median depth, so metric and relative models stay aligned.
-- **Navigation.** Drag to orbit, right-drag to pan, scroll to zoom. **W/A/S/D** fly, **Q/E**
-  down/up, **Shift** faster, with sensitivity sliders for each.
+- **Navigation.** First person: drag to look around from where you stand, scroll to move forward
+  or back. **W/A/S/D** fly, **Q/E** down/up, **Shift** faster, with sensitivity sliders for each.
 - **Colour modes:** RGB, depth, confidence, discontinuity, curl, residual.
 - **2D strip:** input, depth, confidence, normals and analysis maps. Click any image to enlarge it.
 - **Integrability** (`backend/analysis/integrability.py`): how much of a model's predicted normal

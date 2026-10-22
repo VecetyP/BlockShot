@@ -202,8 +202,14 @@ function IntrinsicsProjection({ meta, frame, near, far }: { meta: RunMeta; frame
 }
 
 /** Navigation sensitivities. `move` is in cloud-median-depths per second, so it feels the same for
- * metric and relative models; the rest are OrbitControls' own speed factors (1 = default). */
-export type NavSettings = { move: number; rotate: number; zoom: number; pan: number };
+ * metric and relative models; `rotate` is OrbitControls' look speed (1 = default); `zoom` scales
+ * how far one scroll step moves forward. */
+export type NavSettings = { move: number; rotate: number; zoom: number };
+
+// First-person look: the orbit pivot sits just in front of the camera (this fraction of the cloud's
+// median depth), so dragging turns the camera where it stands instead of swinging it around a point.
+const LOOK = 0.01;
+const SCROLL_STEP = 0.1; // median depths per scroll notch at zoom 1
 
 // Camera-local directions: three.js cameras look down -Z with +Y up.
 const MOVE_KEYS: Record<string, [number, number, number]> = {
@@ -225,8 +231,8 @@ const typingIn = (t: EventTarget | null) =>
   t instanceof HTMLTextAreaElement ||
   (t instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "file"].includes(t.type));
 
-/** WASD fly: moves the camera and the orbit target together, so mouse orbiting keeps working. */
-function WasdControls({ speed, scale }: { speed: number; scale: number }) {
+/** WASD fly and scroll: move the camera and the look pivot together, so dragging keeps turning in place. */
+function WasdControls({ speed, scale, scroll }: { speed: number; scale: number; scroll: number }) {
   const { camera, controls, gl } = useThree() as unknown as {
     camera: THREE.Camera;
     controls: Controls | null;
@@ -246,12 +252,24 @@ function WasdControls({ speed, scale }: { speed: number; scale: number }) {
     };
     const up = (e: KeyboardEvent) => void held.delete(e.code in MOVE_KEYS ? e.code : e.key === "Shift" ? "Shift" : "");
     const clear = () => held.clear();
+    const wheel = (e: WheelEvent) => {
+      if (!controls) return;
+      e.preventDefault();
+      // Scroll forward/back along the view, moving the pivot with the camera.
+      const step = -Math.sign(e.deltaY) * SCROLL_STEP * scroll * scale * (e.shiftKey ? SPRINT : 1);
+      const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(step);
+      camera.position.add(d);
+      controls.target.add(d);
+      controls.update();
+    };
+    el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("pointerenter", claim);
     el.addEventListener("pointerdown", claim);
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     window.addEventListener("blur", clear); // keys released while the window was unfocused
     return () => {
+      el.removeEventListener("wheel", wheel);
       el.removeEventListener("pointerenter", claim);
       el.removeEventListener("pointerdown", claim);
       window.removeEventListener("keydown", down);
@@ -259,7 +277,7 @@ function WasdControls({ speed, scale }: { speed: number; scale: number }) {
       window.removeEventListener("blur", clear);
       if (keyOwner === me) keyOwner = null;
     };
-  }, [gl, me, held]);
+  }, [gl, me, held, controls, camera, scroll, scale]);
 
   useFrame((_, dt) => {
     keyOwner ??= me; // the previous owner's panel was closed
@@ -287,14 +305,14 @@ function Snap({ target, snapKey, meta, frame }: { target: number; snapKey: numbe
     camera.up.set(0, 1, 0);
     if (!c2w) {
       camera.position.set(0, 0, 0);
-      controls.target.set(0, 0, -target);
+      controls.target.set(0, 0, -target * LOOK);
       controls.update(); // looks from the origin straight down -Z (= +Z in OpenCV): identity rotation
     } else {
       // OpenCV camera-to-world -> three.js: F R F with F = diag(1, -1, -1) on both sides.
       const r = (i: number, j: number) => (i === 0 ? 1 : -1) * (j === 0 ? 1 : -1) * c2w[i][j];
       const R = new THREE.Matrix4().set(r(0, 0), r(0, 1), r(0, 2), 0, r(1, 0), r(1, 1), r(1, 2), 0, r(2, 0), r(2, 1), r(2, 2), 0, 0, 0, 0, 1);
       camera.position.set(c2w[0][3], -c2w[1][3], -c2w[2][3]);
-      controls.target.copy(new THREE.Vector3(0, 0, -target).applyMatrix4(R).add(camera.position));
+      controls.target.copy(new THREE.Vector3(0, 0, -target * LOOK).applyMatrix4(R).add(camera.position));
       controls.update(); // aims at the target but drops the camera's roll...
       camera.quaternion.setFromRotationMatrix(R); // ...so restore the exact orientation
     }
@@ -312,8 +330,8 @@ export default function Viewer({ cloud, meta, mode, field, tears, pointSize, sna
       <IntrinsicsProjection meta={meta} frame={frame} near={z.min * 0.01} far={z.max * 100} />
       {blocks ? <Blocks blocks={blocks} /> : <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />}
       {tears && tears.length > 0 && <TearMarkers tears={tears} />}
-      <OrbitControls makeDefault enableDamping={false} rotateSpeed={nav.rotate} zoomSpeed={nav.zoom} panSpeed={nav.pan} />
-      <WasdControls speed={nav.move} scale={z.median} />
+      <OrbitControls makeDefault enableDamping={false} enableZoom={false} enablePan={false} rotateSpeed={nav.rotate} />
+      <WasdControls speed={nav.move} scale={z.median} scroll={nav.zoom} />
       {sync && <SyncControls sync={sync} scale={z.median} />}
       <Snap target={z.median} snapKey={snapKey} meta={meta} frame={frame} />
     </Canvas>

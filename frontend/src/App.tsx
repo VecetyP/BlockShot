@@ -7,7 +7,7 @@ const MAX_PANELS = 4;
 const RECOMMENDED_MODEL = "moge"; // the best-looking builds in practice; listed first and picked by default
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
 
-const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1, pan: 1 };
+const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1 };
 const NAV_KEY = "nav-settings";
 
 // A per-viewer convenience: storage can be unavailable (private window, blocked site data).
@@ -592,13 +592,12 @@ export default function App() {
         </div>
         <div className="toolbar nav" aria-label="Navigation">
           <span className="hint" title="Click or hover a viewer first. In a comparison grid the panel under the mouse leads.">
-            <kbd>WASD</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up · <kbd>Shift</kbd> faster
+            Drag to look · <kbd>WASD</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up · scroll forward/back · <kbd>Shift</kbd> faster
           </span>
           <div className="group sliders">
             <Slider label="Move" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
-            <Slider label="Orbit" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
-            <Slider label="Zoom" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
-            <Slider label="Pan" min={0.1} max={3} step={0.1} value={nav.pan} onChange={(pan) => setNav({ pan })} />
+            <Slider label="Look" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
+            <Slider label="Scroll" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
             <button className="quiet" onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
           </div>
         </div>
