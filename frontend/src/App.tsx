@@ -332,7 +332,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
   );
 }
 
-function VideoOptions({ value, onChange, legend }: { value: api.VideoSettings; onChange: (v: api.VideoSettings) => void; legend: string }) {
+function VideoOptions({ value, onChange, legend, fov = true }: { value: api.VideoSettings; onChange: (v: api.VideoSettings) => void; legend: string; fov?: boolean }) {
   return (
     <fieldset className="models video-opts">
       <legend>{legend}</legend>
@@ -345,6 +345,14 @@ function VideoOptions({ value, onChange, legend }: { value: api.VideoSettings; o
           <option value="moge">MoGe (sharper, can ghost)</option>
         </select>
       </label>
+      {fov !== false && (
+        <label className="slider" title="The camera's vertical field of view in degrees, if you know it (games show it in their settings). Leave empty to let the model guess; it tends to guess wide views too narrow.">
+          <span>Vertical FOV</span>
+          <input type="number" min={20} max={150} step={1} placeholder="auto" value={value.fov_deg ?? ""}
+            onChange={(e) => onChange({ ...value, fov_deg: e.target.value === "" ? null : Number(e.target.value) })} />
+          <span className="val">°</span>
+        </label>
+      )}
       <label className="option">
         <input type="checkbox" checked={value.hud} onChange={(e) => onChange({ ...value, hud: e.target.checked })} />
         <span>Ignore a static game HUD</span>
@@ -623,7 +631,7 @@ function PlaygroundPanel(p: {
         {nuisance("fast", "Fast turns", "Mouse look three times as sensitive")}
       </fieldset>
 
-      <VideoOptions value={p.video} onChange={p.onVideo} legend="Recordings go to" />
+      <VideoOptions value={p.video} onChange={p.onVideo} legend="Recordings go to" fov={false} />
       <ModelPicker models={p.models} picked={p.picked} onPicked={p.onPicked} legend="Snapshots go to" />
     </div>
   );
@@ -729,7 +737,8 @@ export default function App() {
     setRunning(startingJob("video"));
     try {
       const name = `playground_${truth.scene.replace(/\W+/g, "-")}_${stamp()}.webm`;
-      const scene = await api.processVideo(new File([blob], name, { type: "video/webm" }), pgVideo, setRunning, truth);
+      // The playground knows its camera, as you would for a game: send its field of view.
+      const scene = await api.processVideo(new File([blob], name, { type: "video/webm" }), { ...pgVideo, fov_deg: truth.fov_deg }, setRunning, truth);
       await refreshRuns();
       setPgResults([{ id: scene.id, label: `Recording · ${truth.frames.length ? truth.frames[truth.frames.length - 1].t.toFixed(1) : 0} s` }]);
     } catch (e) {

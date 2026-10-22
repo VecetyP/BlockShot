@@ -122,13 +122,14 @@ export async function getCloud(id: string): Promise<Cloud> {
   return { n, xyz, discontinuity, confidence, rgb: new Uint8Array(buf, off, n * 3) };
 }
 
-export type VideoSettings = { fps: number; max_frames: number; hud: boolean; geometry: "moge" | "vggt" };
+/** fov_deg: the camera's vertical field of view when known (games); unset = the model's guess. */
+export type VideoSettings = { fps: number; max_frames: number; hud: boolean; geometry: "moge" | "vggt"; fov_deg?: number | null };
 
 /** Reconstructs one scene from a video (cached by video + settings). */
 export const processVideo = (file: File, s: VideoSettings, onProgress?: OnProgress, truth?: object) => {
   const fd = new FormData();
   fd.append("video", file);
-  Object.entries(s).forEach(([k, v]) => fd.append(k, String(v)));
+  Object.entries(s).forEach(([k, v]) => v != null && fd.append(k, String(v)));
   if (truth) fd.append("truth", JSON.stringify(truth));
   return startJob(`${API}/video`, { body: fd }).then((id) => waitJob<{ id: string; cached: boolean; meta: RunMeta }>(id, onProgress));
 };

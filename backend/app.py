@@ -104,13 +104,16 @@ def process_video(
     max_side: int = Form(640),
     hud: bool = Form(True),
     geometry: str = Form("vggt"),
+    fov_deg: float | None = Form(None),
     truth: str | None = Form(None),
 ):
     """Starts a job reconstructing one scene from a video; its result is {id, cached, meta}."""
     if not (0.2 <= fps <= 15 and 2 <= max_frames <= 300 and 256 <= max_side <= 1280 and geometry in ("moge", "vggt")):
         raise HTTPException(400, "fps 0.2-15, max_frames 2-300, max_side 256-1280, geometry moge|vggt")
+    if fov_deg is not None and not 20 <= fov_deg <= 150:
+        raise HTTPException(400, "fov_deg (vertical field of view) 20-150")
     data, source = video.file.read(), video.filename
-    settings = {"fps": fps, "max_frames": max_frames, "max_side": max_side, "hud": hud, "geometry": geometry}
+    settings = {"fps": fps, "max_frames": max_frames, "max_side": max_side, "hud": hud, "geometry": geometry, "fov_deg": fov_deg}
     truth_obj = _parse_truth(truth)
 
     def work(progress):

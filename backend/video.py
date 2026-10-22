@@ -22,6 +22,7 @@ and shiny floors, the filter a perforated brick wall (other frames see through i
 The scene is kept as per-frame grids (depth, colour, mask, K, camera-to-world) so later steps can
 fill surfaces between pixels; `world_points` turns a frame into points in scene coordinates.
 """
+import math
 import time
 from dataclasses import asdict, dataclass
 
@@ -55,6 +56,7 @@ class Settings:
     max_side: int = 640
     hud: bool = True  # ignore a static game HUD
     geometry: str = "vggt"  # "vggt": VGGT depth (frames agree); "moge": MoGe detail on VGGT's shape
+    fov_deg: float | None = None  # vertical field of view when known (games): replaces VGGT's focal guess
 
 
 def _quiet(*_, **__):
@@ -282,6 +284,12 @@ def reconstruct_frames(frames: list[np.ndarray], s: Settings, stats: dict, timin
     t = time.perf_counter()
     vg, stats["vggt_passes"] = vggt_poses(frames, progress)
     registry.free_cache()
+    if s.fov_deg:
+        # VGGT and MoGe both guessed a 102° wide playground view ~8% too narrow, which bends every
+        # frame so they can't line up (surface error 14.6 cm; 10.9 cm with the real FOV).
+        h, w = vg["depth"].shape[1:]
+        f = (h / 2) / math.tan(math.radians(s.fov_deg) / 2)
+        vg["K"][:] = [[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]]
     timings["poses"] = time.perf_counter() - t
 
     n = len(frames)

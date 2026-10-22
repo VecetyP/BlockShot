@@ -79,6 +79,11 @@ Drop an `mp4`, `mov` or `webm` instead of an image. The options:
   per-frame depth bent onto VGGT's shape, but with more ghosting).
 - **Ignore a static game HUD** (on): pixels that stay still while the picture moves, such as a
   crosshair, hotbar or minimap, are left out of the scene.
+- **Vertical FOV** (empty = auto): the camera's vertical field of view in degrees, if you know it.
+  Games usually show it in their settings (Roblox and Minecraft default to 70). Otherwise VGGT
+  guesses it, and it tends to guess wide views too narrow. That bends every frame so they don't line
+  up: on a playground loop the surfaces came out 10.8 cm off with the guess, and 8.5 cm with the
+  real FOV.
 
 The result is a **scene**: one point cloud from all frames, shown with a **View from frame** slider
 and a strip of the sampled frames. Click a frame to view the scene, and its build, from that frame's
@@ -167,7 +172,8 @@ every surface is, so each run gets scored against the truth instead of judged by
 - **Moving:** click the view to look around with the mouse, **WASD** to walk, **Space** to jump,
   **Shift** to sprint. You can stand on boxes.
 - **Recording:** **R** starts and stops a recording, which goes to the video pipeline with the options
-  under "Recordings go to". **P** sends a snapshot to the models ticked under "Snapshots go to".
+  under "Recordings go to", plus the playground camera's field of view (as you'd enter it for a
+  game). **P** sends a snapshot to the models ticked under "Snapshots go to".
   **Autopilot** records a repeatable path from the scene's start: a loop around the scene, a turn on the
   spot, or a zig-zag with quick turns.
 - **Game nuisances:** HUD panels with a changing health bar, swinging arms, head bob and fast turns are

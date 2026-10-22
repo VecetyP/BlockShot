@@ -558,7 +558,8 @@ def is_scene(rid: str) -> bool:
 
 def _scene_id(sha: str, s: video.Settings) -> str:
     """Scenes are cached by video, settings, model versions and pipeline version."""
-    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version + f"p{video.PIPELINE}"
+    # Unset options are left out, so adding one doesn't change existing runs' ids.
+    version = json.dumps({k: v for k, v in dataclasses.asdict(s).items() if v is not None}, sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version + f"p{video.PIPELINE}"
     return f"{sha[:16]}_scene_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
 
 

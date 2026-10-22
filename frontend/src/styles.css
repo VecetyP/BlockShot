@@ -94,7 +94,7 @@ kbd {
 .drop.has-file label { color: var(--text); border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
 .models { border: 1px solid var(--line); border-radius: var(--radius-lg); margin: 0; padding: 8px 12px 10px; display: grid; gap: 6px; min-width: 0; }
 .video-opts .slider { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) 2.6em; gap: 8px; white-space: normal; }
-.video-opts .slider input[type="range"], .video-opts .slider select { width: 100%; min-width: 0; }
+.video-opts .slider input[type="range"], .video-opts .slider select, .video-opts .slider input[type="number"] { width: 100%; min-width: 0; }
 .video-opts .slider .val { min-width: 0; text-align: right; }
 .note { line-height: 1.4; }
 .option { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; line-height: 1.35; }
