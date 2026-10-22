@@ -1,5 +1,4 @@
 import dataclasses
-import functools
 import hashlib
 import io
 import json
@@ -285,36 +284,80 @@ def _rgb(rid: str) -> np.ndarray:
     return np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
 
 
-@functools.lru_cache(maxsize=8)
-def minecraft_build(rid: str, size: int) -> minecraft.Build:
-    a = load_arrays(rid)
-    return minecraft.build(a["points"], _rgb(rid), a["mask"], a["intrinsics"], size)
+_builds: dict = {}  # (rid, mode, value) -> Build; a handful of recent builds
+_build_lock = threading.Lock()  # one build at a time, and never the same build twice
+MAX_CACHED_BUILDS = 4
 
 
-def minecraft_info(rid: str, size: int) -> dict:
-    b = minecraft_build(rid, size)
+def minecraft_build(rid: str, mode: str, value: float, progress=None) -> minecraft.Build:
+    key = (rid, mode, float(value))
+    if key in _builds:
+        return _builds[key]
+    with _build_lock:
+        if key not in _builds:
+            say = progress or (lambda *a, **k: None)
+            say("reading points")
+            a = load_arrays(rid)
+            b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say)
+            while len(_builds) >= MAX_CACHED_BUILDS:
+                _builds.pop(next(iter(_builds)))
+            _builds[key] = b
+    return _builds[key]
+
+
+def minecraft_info(rid: str, mode: str, value: float, progress=None) -> dict:
+    b = minecraft_build(rid, mode, value, progress)
     counts = np.bincount(b.block, minlength=len(minecraft.BLOCK_NAMES))
     top = [(minecraft.BLOCK_NAMES[i], int(counts[i])) for i in np.argsort(-counts)[:8] if counts[i]]
+    _, _, _, lod = minecraft.preview(b) if len(b.ijk) > minecraft.PREVIEW_MAX else (None, None, None, 1)
+    metric = load_meta(rid).get("scale_kind") == "metric"
     return {
         "dims": b.dims,
         "blocks": len(b.ijk),
+        "block_size": b.block_size,
+        "block_size_unit": "m" if metric else "units",
+        "budget_limited": b.budget_limited,
+        "too_tall": b.dims[1] > minecraft.WORLD_HEIGHT,
+        "single_file": math.prod(b.dims) <= minecraft.MAX_SINGLE_CELLS,
+        "tiles": len(np.unique(b.ijk[:, [0, 2]] // TILE, axis=0)),
         "fov_deg": round(b.fov_deg, 1),
+        "pitch_deg": round(b.pitch_deg, 1),
         "offset": b.offset,
+        "preview_lod": lod,
         "data_version": minecraft.DATA_VERSION,
         "top_blocks": top,
     }
 
 
-def minecraft_preview_bin(rid: str, size: int) -> bytes:
-    """uint32 N, float32 block_size, float32 lo[3], int16 ijk[N*3], uint8 rgb[N*3] (block colours).
-    Block (i, j, k) spans lo + [ijk, ijk+1) * block_size in Minecraft axes."""
-    b = minecraft_build(rid, size)
-    head = np.uint32(len(b.ijk)).tobytes() + np.array([b.block_size, *b.lo], "<f4").tobytes()
-    return head + b.ijk.astype("<i2").tobytes() + minecraft.BLOCK_RGB[b.block].tobytes()
+TILE = 128
 
 
-def minecraft_schem(rid: str, size: int) -> tuple[bytes, str]:
-    meta = load_meta(rid)
-    stem = Path(str(meta.get("source") or rid)).stem
+def minecraft_preview_bin(rid: str, mode: str, value: float) -> bytes:
+    """uint32 N, float32 cube_size, float32 lo[3], int16 ijk[N*3], uint8 rgb[N*3] (block colours).
+    Cube (i, j, k) spans lo + [ijk, ijk+1) * cube_size in Minecraft axes; big builds are previewed
+    with merged cubes (cube_size is then a multiple of the block size)."""
+    b = minecraft_build(rid, mode, value)
+    ijk, rgb, size, _ = minecraft.preview(b)
+    head = np.uint32(len(ijk)).tobytes() + np.array([size, *b.lo], "<f4").tobytes()
+    return head + ijk.astype("<i2").tobytes() + rgb.astype(np.uint8).tobytes()
+
+
+def _export_name(rid: str, mode: str, value: float) -> str:
+    stem = Path(str(load_meta(rid).get("source") or rid)).stem
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)[:40] or "build"
-    return minecraft.schematic(minecraft_build(rid, size)), f"{safe}_{model_of(rid)}_{size}.schem"
+    return f"{safe}_{model_of(rid)}_{mode}{value:g}".replace(".", "p")
+
+
+def minecraft_schem(rid: str, mode: str, value: float) -> tuple[bytes, str]:
+    return minecraft.whole(minecraft_build(rid, mode, value)), _export_name(rid, mode, value) + ".schem"
+
+
+def minecraft_zip(rid: str, mode: str, value: float, progress=None) -> str:
+    """Writes the tiles zip into runs/<id>/exports/ and returns its file name."""
+    b = minecraft_build(rid, mode, value, progress)
+    name = _export_name(rid, mode, value) + ".zip"
+    d = RUNS / rid / "exports"
+    d.mkdir(exist_ok=True)
+    data = minecraft.tiles_zip(b, name[:-4], TILE, progress or (lambda *a, **k: None))
+    _atomic(d / name, lambda f: f.write(data))
+    return name

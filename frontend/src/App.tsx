@@ -47,7 +47,7 @@ function Panel(props: {
   nav: NavSettings;
   titled: boolean;
   showTears: boolean;
-  blockSize?: number; // when set, show the Minecraft build of this many blocks instead of the points
+  build?: api.BuildSettings; // when set, show the Minecraft build instead of the points
 }) {
   const [meta, setMeta] = useState<api.RunMeta | null>(null);
   const [cloud, setCloud] = useState<api.Cloud | null>(null);
@@ -79,14 +79,14 @@ function Panel(props: {
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
   const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
-  const blocksKey = `${props.id}:${props.blockSize}`;
+  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}`;
   useEffect(() => {
-    if (!props.blockSize || !buildable || blocks?.key === blocksKey) return;
-    api.getBlocks(props.id, props.blockSize)
+    if (!props.build || !buildable || blocks?.key === blocksKey) return;
+    api.getBlocks(props.id, props.build)
       .then((data) => setBlocks({ key: blocksKey, data }))
       .catch(() => setBlocks({ key: blocksKey, data: null }));
-  }, [props.blockSize, buildable, blocksKey, blocks?.key, props.id]);
-  const shownBlocks = props.blockSize && blocks?.key === blocksKey ? blocks.data : null;
+  }, [props.build, buildable, blocksKey, blocks?.key, props.id]);
+  const shownBlocks = props.build && blocks?.key === blocksKey ? blocks.data : null;
 
   return (
     <div className="panel">
@@ -200,26 +200,62 @@ function Lightbox({ items, index, onIndex, onClose }: { items: LightboxItem[]; i
 }
 
 /** Download a run's Minecraft build, with what to do in game so it lines up with the image. */
-function MinecraftCard({ run, size }: { run: api.RunMeta; size: number }) {
+function MinecraftCard({ run, settings }: { run: api.RunMeta; settings: api.BuildSettings }) {
   const [info, setInfo] = useState<api.MinecraftInfo | null>(null);
+  const [building, setBuilding] = useState<api.JobState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<api.JobState | null>(null);
+  const [zipUrl, setZipUrl] = useState<string | null>(null);
   useEffect(() => {
+    let live = true;
     setInfo(null);
-    api.getMinecraftInfo(run.id, size).then(setInfo).catch(() => setInfo(null));
-  }, [run.id, size]);
-  if (!info) return <div className="mc-card"><small>Building…</small></div>;
+    setError(null);
+    setZipUrl(null);
+    setBuilding(startingJob("minecraft"));
+    api.buildMinecraft(run.id, settings, (j) => live && setBuilding(j))
+      .then((i) => live && setInfo(i))
+      .catch((e) => live && setError(String(e)))
+      .finally(() => live && setBuilding(null));
+    return () => { live = false; };
+  }, [run.id, settings.mode, settings.value]);
+  const exportZip = () => {
+    setExporting(startingJob("tiles"));
+    api.exportTiles(run.id, settings, setExporting)
+      .then(setZipUrl)
+      .catch((e) => setError(String(e)))
+      .finally(() => setExporting(null));
+  };
+  if (building) return <div className="mc-card"><strong>Minecraft build</strong><ProgressBar job={building} /></div>;
+  if (error || !info) return <div className="mc-card"><strong>Minecraft build</strong><small className="error">{error ?? "No build"}</small></div>;
   const [w, h, l] = info.dims;
   const fov = Math.round(info.fov_deg);
+  const pitch = Math.round(info.pitch_deg);
+  const size = info.block_size_unit === "m" ? `${info.block_size < 1 ? `${Math.round(info.block_size * 100)} cm` : `${info.block_size.toFixed(2)} m`}` : `${info.block_size.toPrecision(2)} units`;
   return (
     <div className="mc-card">
       <strong>Minecraft build</strong>
-      <small>{w} × {h} × {l} blocks · {info.blocks.toLocaleString()} placed</small>
-      <a className="button primary" href={api.schemUrl(run.id, size)} download>Download .schem</a>
+      <small>{w} × {h} × {l} blocks · {info.blocks.toLocaleString()} placed · 1 block = {size}</small>
+      {info.budget_limited && <small className="warn">Blocks were enlarged to stay under the block budget.</small>}
+      {info.too_tall && <small className="warn">Taller than Minecraft's 384-block build height: the top or bottom will be cut off.</small>}
+      {info.preview_lod > 1 && <small>3D preview merges {info.preview_lod}³ blocks per cube; downloads are full detail.</small>}
+      {info.tiles <= 1 && info.single_file ? (
+        <a className="button primary" href={api.schemUrl(run.id, settings)} download>Download .schem</a>
+      ) : exporting ? (
+        <ProgressBar job={exporting} />
+      ) : zipUrl ? (
+        <a className="button primary" href={zipUrl} download>Download {info.tiles} tiles (.zip)</a>
+      ) : (
+        <button className="primary" onClick={exportZip}>Prepare {info.tiles} tiles (.zip)</button>
+      )}
       <details>
-        <summary>How to line it up in game</summary>
+        <summary>How to line it up in game (1.20+)</summary>
         <ol>
-          <li>Put the file in <code>.minecraft/config/worldedit/schematics/</code> (WorldEdit mod) or the server's <code>plugins/WorldEdit/schematics/</code>.</li>
-          <li>Stand where the photo was taken from and face south: <code>/tp @s ~ ~ ~ 0 0</code></li>
-          <li><code>//schem load &lt;file name&gt;</code>, then <code>//paste</code>. The photo's camera lands at your eyes.</li>
+          <li>Put the {info.tiles > 1 ? "tiles" : "file"} in <code>.minecraft/config/worldedit/schematics/</code> (WorldEdit mod) or the server's <code>plugins/WorldEdit/schematics/</code>.</li>
+          <li>Stand where the picture was taken from, facing south: <code>/tp @s ~ ~ ~ 0 {pitch}</code></li>
+          <li>
+            <code>//schem load &lt;name&gt;</code>, then <code>//paste</code>
+            {info.tiles > 1 ? " for every tile, without moving in between (the zip has the list)." : "."} The picture's camera lands at your eyes.
+          </li>
           <li>Options → FOV: <strong>{fov}</strong>{fov < 30 || fov > 110 ? " (outside Minecraft's 30–110 range; use the closest)" : ""}, FOV Effects off, F1 to hide the HUD.</li>
         </ol>
       </details>
@@ -227,7 +263,46 @@ function MinecraftCard({ run, size }: { run: api.RunMeta; size: number }) {
   );
 }
 
-function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boolean; blockSize: number }) {
+const AUTO_STEPS = [50, 100, 200, 300, 500, 750, 1000, 2000, 4000]; // thousand blocks
+
+/** Mode select plus the one slider that mode needs. */
+function BuildControls({ value, onChange }: { value: api.BuildSettings; onChange: (b: api.BuildSettings) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  // Builds take seconds, so only commit when the slider is released.
+  const commit = () => onChange(draft);
+  const slider = (label: string, min: number, max: number, step: number, shown: string, v: number, set: (x: number) => void) => (
+    <label className="slider">
+      <span>{label}</span>
+      <input type="range" min={min} max={max} step={step} value={v} onChange={(e) => set(+e.target.value)} onPointerUp={commit} onKeyUp={commit} />
+      <span className="val">{shown}</span>
+    </label>
+  );
+  const idx = Math.max(0, AUTO_STEPS.indexOf(draft.value));
+  return (
+    <>
+      <label className="slider">
+        <span>Block size</span>
+        <select
+          value={value.mode}
+          onChange={(e) => {
+            const mode = e.target.value as api.BuildMode;
+            onChange({ mode, value: { auto: 300, meters: 0.25, fit: 128 }[mode] });
+          }}
+        >
+          <option value="auto">Auto (by block count)</option>
+          <option value="meters">Real size</option>
+          <option value="fit">Fit longest side</option>
+        </select>
+      </label>
+      {draft.mode === "auto" && slider("About", 0, AUTO_STEPS.length - 1, 1, `${AUTO_STEPS[idx] >= 1000 ? `${AUTO_STEPS[idx] / 1000}M` : `${AUTO_STEPS[idx]}k`} blocks`, idx, (i) => setDraft({ mode: "auto", value: AUTO_STEPS[i] }))}
+      {draft.mode === "meters" && slider("1 block =", 0.05, 2, 0.05, `${draft.value.toFixed(2)} m`, draft.value, (v) => setDraft({ mode: "meters", value: v }))}
+      {draft.mode === "fit" && slider("Longest side", 32, 1024, 32, `${draft.value} blocks`, draft.value, (v) => setDraft({ mode: "fit", value: v }))}
+    </>
+  );
+}
+
+function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean; build: api.BuildSettings }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
   const [offAxis, setOffAxis] = useState<string[] | null>(null);
   const [rendering, setRendering] = useState<api.JobState | null>(null);
@@ -290,7 +365,7 @@ function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boo
           <button className="offaxis" onClick={renderOffAxis}>Off-axis renders</button>
         )
       )}
-      {hasDepth && <MinecraftCard run={run} size={blockSize} />}
+      {hasDepth && <MinecraftCard run={run} settings={build} />}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -309,7 +384,7 @@ export default function App() {
   const [pointSize, setPointSize] = useState(2);
   const [snapKey, setSnapKey] = useState(0);
   const [showTears, setShowTears] = useState(false);
-  const [mcSize, setMcSize] = useState(128);
+  const [build, setBuild] = useState<api.BuildSettings>({ mode: "auto", value: 300 });
   const [showBlocks, setShowBlocks] = useState(false);
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
@@ -464,7 +539,7 @@ export default function App() {
               <Panel
                 key={id}
                 id={id}
-                blockSize={showBlocks ? mcSize : undefined}
+                build={showBlocks ? build : undefined}
                 mode={mode}
                 pointSize={pointSize}
                 snapKey={snapKey}
@@ -483,14 +558,14 @@ export default function App() {
           <div className="strips">
             <div className="strip-bar" aria-label="Minecraft build">
               <strong>Minecraft build</strong>
-              <span className="hint">looks like the image from one spot: the original camera</span>
-              <Slider label="Size" min={32} max={256} step={16} value={mcSize} unit=" blocks" onChange={setMcSize} />
+              <span className="hint">looks like the image from one spot</span>
+              <BuildControls value={build} onChange={setBuild} />
               <label className="check">
                 <input type="checkbox" checked={showBlocks} onChange={(e) => setShowBlocks(e.target.checked)} />
                 Show as blocks
               </label>
             </div>
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} blockSize={mcSize} />)}
+            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} build={build} />)}
           </div>
         )}
       </main>

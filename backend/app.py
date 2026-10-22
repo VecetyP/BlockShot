@@ -8,7 +8,7 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-from . import jobs, store  # noqa: E402
+from . import jobs, minecraft, store  # noqa: E402
 from .models import registry  # noqa: E402
 
 app = FastAPI(title="BlockShot")
@@ -134,33 +134,61 @@ def field(rid: str, kind: str, stride: int | None = None):
     return Response(b, media_type="application/octet-stream")
 
 
-def _check_minecraft(rid: str, size: int) -> None:
+def _check_minecraft(rid: str, mode: str, value: float) -> None:
     _run_or_404(rid)
     if not store.has_depth(store.load_meta(rid)):
         raise HTTPException(400, "this model has no depth to build from")
-    if not 16 <= size <= 512:
-        raise HTTPException(400, "size must be 16..512 blocks")
+    if mode not in minecraft.MODES:
+        raise HTTPException(400, f"mode must be one of {list(minecraft.MODES)}")
+    lo, hi = minecraft.MODES[mode]
+    if not lo <= value <= hi:
+        raise HTTPException(400, f"value for {mode} must be {lo}..{hi}")
+
+
+@app.post("/runs/{rid}/minecraft/build")
+def minecraft_build(rid: str, mode: str = "auto", value: float = 300):
+    """Starts a job that builds the blocks; its result is the build summary."""
+    _check_minecraft(rid, mode, value)
+    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress))
 
 
 @app.get("/runs/{rid}/minecraft.json")
-def minecraft_info(rid: str, size: int = 128):
-    """Build summary: dimensions, block count, FOV and paste offset."""
-    _check_minecraft(rid, size)
-    return store.minecraft_info(rid, size)
+def minecraft_info(rid: str, mode: str = "auto", value: float = 300):
+    """Build summary: dimensions, block count, block size, FOV, pitch, paste offset, tiles."""
+    _check_minecraft(rid, mode, value)
+    return store.minecraft_info(rid, mode, value)
 
 
 @app.get("/runs/{rid}/minecraft.bin")
-def minecraft_preview(rid: str, size: int = 128):
-    _check_minecraft(rid, size)
-    return Response(store.minecraft_preview_bin(rid, size), media_type="application/octet-stream")
+def minecraft_preview(rid: str, mode: str = "auto", value: float = 300):
+    _check_minecraft(rid, mode, value)
+    return Response(store.minecraft_preview_bin(rid, mode, value), media_type="application/octet-stream")
 
 
 @app.get("/runs/{rid}/minecraft.schem")
-def minecraft_schem(rid: str, size: int = 128):
-    """Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
-    _check_minecraft(rid, size)
-    data, filename = store.minecraft_schem(rid, size)
+def minecraft_schem(rid: str, mode: str = "auto", value: float = 300):
+    """One Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
+    _check_minecraft(rid, mode, value)
+    try:
+        data, filename = store.minecraft_schem(rid, mode, value)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.post("/runs/{rid}/minecraft/tiles")
+def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300):
+    """Starts a job writing the build as a zip of tiles; its result is the download URL."""
+    _check_minecraft(rid, mode, value)
+    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress)}")
+
+
+@app.get("/runs/{rid}/exports/{name}")
+def export_file(rid: str, name: str):
+    path = (store.RUNS / rid / "exports" / name).resolve()
+    if not path.is_relative_to((store.RUNS / rid / "exports").resolve()) or not path.is_file():
+        raise HTTPException(404)
+    return Response(path.read_bytes(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/runs/{rid}/offaxis")

@@ -114,22 +114,39 @@ export const renderOffAxis = (id: string, onProgress?: OnProgress) =>
     .then((job) => waitJob<string[]>(job, onProgress))
     .then((u) => u.map((x) => API + x));
 
+/** How blocks are sized. auto: about `value` thousand blocks; meters: one block = value m; fit: longest side. */
+export type BuildMode = "auto" | "meters" | "fit";
+export type BuildSettings = { mode: BuildMode; value: number };
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks
   blocks: number;
+  block_size: number;
+  block_size_unit: "m" | "units"; // metres for metric models
+  budget_limited: boolean; // blocks were made bigger to stay under the block budget
+  too_tall: boolean; // taller than Minecraft's 384-block build height
+  single_file: boolean; // small enough for one .schem
+  tiles: number;
   fov_deg: number; // vertical FOV that makes the build line up with the image
+  pitch_deg: number; // in-game pitch to look along the camera
   offset: [number, number, number];
+  preview_lod: number; // the 3D preview merges this many blocks per side
   data_version: number;
   top_blocks: [string, number][];
 };
+const q = (b: BuildSettings) => `mode=${b.mode}&value=${b.value}`;
 export type BlockPreview = { n: number; size: number; lo: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 
-export const getMinecraftInfo = (id: string, size: number) =>
-  fetch(`${API}/runs/${id}/minecraft.json?size=${size}`).then(json<MinecraftInfo>);
+/** Builds the blocks in a background job (cached on the server); resolves with the summary. */
+export const buildMinecraft = (id: string, b: BuildSettings, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/minecraft/build?${q(b)}`).then((job) => waitJob<MinecraftInfo>(job, onProgress));
+
+/** Writes the build as a zip of tiles; resolves with its download URL. */
+export const exportTiles = (id: string, b: BuildSettings, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/minecraft/tiles?${q(b)}`).then((job) => waitJob<string>(job, onProgress)).then((u) => API + u);
 
 // Layout documented in backend/store.py:minecraft_preview_bin.
-export async function getBlocks(id: string, size: number): Promise<BlockPreview> {
-  const r = await fetch(`${API}/runs/${id}/minecraft.bin?size=${size}`);
+export async function getBlocks(id: string, b: BuildSettings): Promise<BlockPreview> {
+  const r = await fetch(`${API}/runs/${id}/minecraft.bin?${q(b)}`);
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const buf = await r.arrayBuffer();
   const n = new Uint32Array(buf, 0, 1)[0];
@@ -137,4 +154,4 @@ export async function getBlocks(id: string, size: number): Promise<BlockPreview>
   return { n, size: f[0], lo: f.slice(1), ijk: new Int16Array(buf, 20, n * 3), rgb: new Uint8Array(buf, 20 + n * 6, n * 3) };
 }
 
-export const schemUrl = (id: string, size: number) => `${API}/runs/${id}/minecraft.schem?size=${size}`;
+export const schemUrl = (id: string, b: BuildSettings) => `${API}/runs/${id}/minecraft.schem?${q(b)}`;

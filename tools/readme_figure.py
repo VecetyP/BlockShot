@@ -1,6 +1,6 @@
 """Render the README figure: input image | its Minecraft build from the input camera | the build from 30°.
 
-    uv run python tools/readme_figure.py <run id> [size] [out.jpg]
+    uv run python tools/readme_figure.py <run id> [thousand blocks] [out.jpg]
 
 Draws each block's exposed faces (Minecraft face shading, painter's algorithm) with PIL.
 """
@@ -65,10 +65,10 @@ def render(b: minecraft.Build, K: np.ndarray, hw: tuple[int, int], yaw: float, b
     return img
 
 
-def main(rid: str, size: int = 192, out: str = "docs/minecraft.jpg") -> None:
+def main(rid: str, kblocks: int = 300, out: str = "docs/minecraft.jpg") -> None:
     a = store.load_arrays(rid)
     rgb = store._rgb(rid)
-    b = minecraft.build(a["points"], rgb, a["mask"], a["intrinsics"], size)
+    b = minecraft.build_from_image(a["points"], rgb, a["mask"], a["intrinsics"], "auto", kblocks)
     h, w = a["mask"].shape
     s = WIDTH / w
     K = a["intrinsics"].astype(float) * np.array([[s], [s], [1]])

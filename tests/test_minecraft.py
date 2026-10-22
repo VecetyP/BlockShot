@@ -1,4 +1,5 @@
 import gzip
+import math
 import struct
 
 import numpy as np
@@ -42,9 +43,34 @@ def read_nbt(data: bytes):
     return name, payload(tag)
 
 
-def _scene():
+def decode_varints(data: bytes) -> list[int]:
+    out, v, shift = [], 0, 0
+    for byte in data:
+        v |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+        else:
+            out.append(v)
+            v, shift = 0, 0
+    return out
+
+
+def placed(schem: bytes) -> dict[tuple[int, int, int], str]:
+    """Where each block lands relative to the player's feet when pasted: idx + WEOffset."""
+    _, s = read_nbt(gzip.decompress(schem))
+    W, L = s["Width"], s["Length"]
+    names = {i: n for n, i in s["Palette"].items()}
+    off = [s["Metadata"][k] for k in ("WEOffsetX", "WEOffsetY", "WEOffsetZ")]
+    out = {}
+    for i, v in enumerate(decode_varints(s["BlockData"])):
+        if v:
+            x, z, y = i % W, (i // W) % L, i // (W * L)
+            out[(x + off[0], y + off[1], z + off[2])] = names[v]
+    return out
+
+
+def _scene(h=48, w=64):
     """A grey wall 4 units ahead with a red square in its upper-right quarter."""
-    h, w = 48, 64
     depth = np.full((h, w), 4.0, np.float32)
     rgb = np.full((h, w, 3), 128, np.uint8)
     rgb[4:16, 44:60] = (200, 30, 30)
@@ -52,31 +78,78 @@ def _scene():
     return unproject(depth, K), rgb, np.ones((h, w), bool), K
 
 
+def test_varints_round_trip_past_one_byte():
+    v = np.array([0, 1, 127, 128, 129, 200, 300, 16383])
+    assert decode_varints(mc.varints(v)) == v.tolist()
+
+
 def test_schematic_is_valid_sponge_v2():
-    b = mc.build(*_scene(), size=32)
-    name, s = read_nbt(gzip.decompress(mc.schematic(b)))
+    b = mc.build_from_image(*_scene(), mode="fit", value=32)
+    name, s = read_nbt(gzip.decompress(mc.whole(b)))
     assert name == "Schematic" and s["Version"] == 2 and s["DataVersion"] == mc.DATA_VERSION
     W, H, L = s["Width"], s["Height"], s["Length"]
-    assert (W, H, L) == b.dims and len(s["BlockData"]) == W * H * L
-    assert s["Palette"]["minecraft:air"] == 0 and s["PaletteMax"] == len(s["Palette"])
-    assert [s["Metadata"][k] for k in ("WEOffsetX", "WEOffsetY", "WEOffsetZ")] == list(b.offset)
-    by_index = {i: n for n, i in s["Palette"].items()}
-    x, y, z = b.ijk[0]
-    assert by_index[s["BlockData"][x + z * W + y * W * L]] == mc.BLOCK_NAMES[b.block[0]]
-    assert sum(v != 0 for v in s["BlockData"]) == len(b.ijk)
+    assert (W, H, L) == b.dims and len(decode_varints(s["BlockData"])) == W * H * L
+    assert s["Palette"]["minecraft:air"] == 0 and s["PaletteMax"] == len(s["Palette"]) == len(mc.BLOCK_NAMES) + 1
+    assert len(placed(mc.whole(b))) == len(b.ijk)
 
 
 def test_paste_puts_the_camera_at_the_eyes_and_image_right_to_the_west():
-    pts, rgb, mask, K = _scene()
-    b = mc.build(pts, rgb, mask, K, size=32)
+    b = mc.build_from_image(*_scene(), mode="fit", value=32)
     world = b.ijk + np.array(b.offset)  # where blocks land relative to the player's feet block
     eye = mc.EYE
     assert np.abs(b.camera + b.offset - eye).max() <= 0.5  # rounding to whole blocks
-    # The wall is ahead (south, +z) of the eyes, and spans the view around the eye line.
-    assert (world[:, 2] > eye[2]).all()
+    assert (world[:, 2] > eye[2]).all()  # ahead = south
     assert world[:, 0].min() < eye[0] < world[:, 0].max() and world[:, 1].min() < eye[1] < world[:, 1].max()
-    # The red square is in the image's upper right: up (+y) and, facing south, to the west (-x).
     red = np.array([mc.BLOCK_NAMES[i].startswith("minecraft:red") for i in b.block])
-    assert red.any()
-    assert world[red, 0].mean() < eye[0] and world[red, 1].mean() > eye[1]
-    assert 0 < b.fov_deg < 90
+    assert red.any() and world[red, 0].mean() < eye[0] and world[red, 1].mean() > eye[1]  # up and west
+    assert 0 < b.fov_deg < 90 and abs(b.pitch_deg) < 1e-9
+
+
+def test_tiles_pasted_from_one_spot_rebuild_the_whole_build():
+    b = mc.build_from_image(*_scene(96, 128), mode="fit", value=120)
+    whole = placed(mc.whole(b))
+    parts = mc.tiles(b, size=16)
+    assert len(parts) > 4
+    merged = {}
+    for _, _, data in parts:
+        merged.update(placed(data))
+    assert merged == whole
+
+
+def test_auto_hits_the_target_block_count_at_any_scene_size():
+    for scale in (1.0, 50.0):  # a small room and a wide scene give the same block count
+        pts, rgb, mask, K = _scene(96, 128)
+        b = mc.build_from_image(pts * scale, rgb, mask, K, mode="auto", value=2)  # 2k blocks
+        assert 1700 <= len(b.ijk) <= 2300
+
+
+def test_surface_filling_makes_a_far_wall_solid_but_never_bridges_a_depth_step():
+    h, w = 40, 60
+    depth = np.where(np.arange(w) < 30, 50.0, 80.0)[None].repeat(h, 0).astype(np.float32)  # step at col 30
+    K = default_intrinsics(h, w)
+    pts, rgb, mask = unproject(depth, K), np.full((h, w, 3), 100, np.uint8), np.ones((h, w), bool)
+    s = 0.25  # far smaller than the ~1.5-unit spacing between pixels at that distance
+    b = mc.build_from_grids([(pts.astype(np.float64), rgb, mask, np.zeros(3))], mc.IMAGE_POSE, 60, "meters", s)
+    z = b.lo[2] + (b.ijk[:, 2] + 0.5) * s  # block centres' distance ahead (Minecraft z = forward)
+    near, far = np.abs(z - 50) < 1, np.abs(z - 80) < 1
+    assert (near | far).all()  # nothing in between: the step is not bridged
+    # Solid: the near wall's blocks cover its whole face, not just one block per pixel.
+    face = mc.to_minecraft_axes(pts[:, :30].reshape(-1, 3))
+    area = np.ptp(face[:, 0]) * np.ptp(face[:, 1])
+    assert near.sum() > 0.8 * area / s**2
+
+
+def test_budget_caps_block_count():
+    b = mc.build_from_image(*_scene(96, 128), mode="meters", value=0.01, budget=500)
+    assert b.budget_limited and len(b.ijk) <= 500
+
+
+def test_tilted_camera_still_gives_level_floors_and_reports_pitch():
+    # A floor (y = 1.5 in a y-down frame) seen by a camera pitched 20° down; "up" is the world's.
+    g = np.stack(np.meshgrid(np.linspace(-3, 3, 80), np.linspace(2, 8, 80)), -1).reshape(-1, 2)
+    floor = np.c_[g[:, 0], np.full(len(g), 1.5), g[:, 1]]
+    t = math.radians(20)
+    pose = mc.Pose(np.zeros(3), np.array([0, math.sin(t), math.cos(t)]), np.array([0.0, -1.0, 0.0]))
+    b = mc.build(floor, np.full((len(floor), 3), 90, np.uint8), pose, 60, "meters", 0.25)
+    assert len(np.unique(b.ijk[:, 1])) == 1  # one level layer
+    assert math.isclose(b.pitch_deg, 20, abs_tol=1e-6)
