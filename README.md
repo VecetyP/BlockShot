@@ -136,8 +136,17 @@ close is the hardest case: on a 29 s clip walking around a chair at about 1 m (4
 neighbouring frames agreed on only 55% of points (93% on a hallway walk), and ghost removal leaves
 holes where the views disagree. Keep the camera moving
 slowly, with each frame overlapping the last. MoGe's metres were 1.56× off on the synthetic room, so
-treat real-size builds from video as approximate. Ghost removal compares every frame with every
-other, so it grows with the square of the frame count: 7 s for 24 frames, roughly 40 s for 60.
+treat real-size builds from video as approximate. Ghost removal checks each frame against up to 24
+others spread over the clip: about 20 s for 50 frames.
+
+**Gameplay recordings.** Frantic first-person gameplay doesn't map. A 35 s Roblox run with swinging arms,
+changing HUD bars, snap turns and a respawn reached 8–29% neighbour agreement, and no newer model fixed
+it. Pi3X and MapAnything were tried; see [tools/bakeoff](tools/bakeoff/README.md). Game footage that maps
+well is recorded like a walkthrough:
+- turn slowly, with each moment overlapping the last;
+- hide the HUD if the game allows it;
+- keep the character's own body out of view, e.g. with a free camera or by looking ahead rather than down;
+- avoid teleports and respawns: record each area as its own clip.
 
 ## How a build is made
 
