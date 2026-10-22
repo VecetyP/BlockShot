@@ -7,10 +7,10 @@ BlockShot turns the cloud into blocks, and you get a WorldEdit schematic. Stand 
 and the build lines up with the original picture. Walk away, and it turns out to be a sculpture of
 what that one camera saw.
 
-![A Minecraft screenshot, its point cloud seen from the original camera, and the same cloud from 30° to the side](docs/hero-tower.jpg)
+![A frame of a hallway video, the scene's point cloud from a step back and above, and its Minecraft build from the same spot](docs/hero-corridor.jpg)
 
-*Left: the input screenshot. Middle: the point cloud, seen from the input camera. Right: the same
-cloud from 30° to the side.*
+*Left: a frame of a walk-through video. Middle: the whole scene's point cloud, seen from a step back
+and above. Right: its Minecraft build, from the same spot.*
 
 > A personal prototype, developed and tested on Windows with an RTX 3080 Laptop GPU (16 GB). Expect
 > rough edges.
@@ -59,8 +59,6 @@ Model weights download from Hugging Face on first use.
 *Left: the photo. Middle: its point cloud, seen from 30° to the side. Right: the Minecraft build, from
 the same spot.*
 
-<img src="docs/orbit.gif" width="560" alt="The tower's point cloud swinging away from the camera and back">
-
 Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
 
 1. Put the file in `.minecraft/config/worldedit/schematics/` (singleplayer mod) or the server's
@@ -106,6 +104,16 @@ colours, with their maps underneath. See [docs/lab.md](docs/lab.md).
 
 ![Two runs compared side by side](docs/lab.jpg)
 
+A single picture's point cloud only holds what that camera saw: from the camera it matches the input
+exactly, and from the side it turns out to be a façade.
+
+![A Minecraft screenshot, its point cloud seen from the original camera, and the same cloud from 30° to the side](docs/lab-tower.jpg)
+
+*Left: the input screenshot. Middle: the point cloud, seen from the input camera. Right: the same
+cloud from 30° to the side.*
+
+<img src="docs/orbit.gif" width="560" alt="The tower's point cloud swinging away from the camera and back">
+
 ## What works, and what doesn't yet
 
 - **Works well:** screenshots and photos with clear structure; slow walk-throughs of rooms, hallways
@@ -134,7 +142,7 @@ The backend is FastAPI (`backend/`), the web app Vite + React + three.js (`front
 
 ```bash
 uv run pytest                                                 # model tests download weights on first run
-uv run python tools/readme_media.py build <run> <out.jpg>     # README pictures: triptych, build, orbit, walk
+uv run python tools/readme_media.py build <run> <out.jpg>     # README pictures: triptych, build, scene, orbit, walk
 uv run python tools/minecraft_palette.py <minecraft.jar>      # re-measure the block palette
 ```
 

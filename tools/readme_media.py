@@ -2,6 +2,7 @@
 
     uv run python tools/readme_media.py triptych <image run> <out.jpg>    input | cloud from the camera | cloud from 30° off
     uv run python tools/readme_media.py build <image run> <out.jpg>       input | cloud from 30° off | its Minecraft build from 30° off
+    uv run python tools/readme_media.py scene <scene run> <out.jpg>       frame 0 | the whole scene's cloud from a step back and up | its build from there
     uv run python tools/readme_media.py orbit <image run> <out.gif>       the cloud swinging away from the camera and back
     uv run python tools/readme_media.py walk <scene run> <out.gif>        a walk along the scene's camera path
 """
@@ -149,6 +150,45 @@ def build(rid: str, out: str, deg: float = 30, kblocks: int = 300) -> None:
     print(f"{out}: {fig.size[0]}x{fig.size[1]}, {len(b.ijk):,} blocks")
 
 
+def _scene_cloud(sc: dict, stride: int):
+    P, C, S = [], [], []
+    for i in range(len(sc["depth"])):
+        m = sc["mask"][i][::stride, ::stride]
+        P.append(video.world_points(sc["depth"][i], sc["K"][i].astype(np.float64), sc["c2w"][i].astype(np.float64))[::stride, ::stride][m])
+        C.append(sc["rgb"][i][::stride, ::stride][m])
+        S.append(sc["depth"][i][::stride, ::stride][m] * stride / sc["K"][i][0, 0] * 1.3)
+    return np.concatenate(P), np.concatenate(C), np.concatenate(S)
+
+
+def scene(rid: str, out: str, frame: int = 0, deg: float = 0, back: float = 1.5, rise: float = 1.2, tilt: float = 12,
+          kblocks: int = 300) -> None:
+    sc = store.load_scene(rid)
+    frame = int(frame)
+    P, C, size = _scene_cloud(sc, 2)
+    rgb = sc["rgb"][frame]
+    h, w = rgb.shape[:2]
+    s = WIDTH / w
+    Ko = sc["K"][frame].astype(np.float64) * np.array([[s], [s], [1]])
+    hw = (round(h * s), WIDTH)
+    # A swing around the middle would put the camera in a wall of a corridor or room, so step back
+    # `back` and up `rise` (metres; scenes are levelled with up = -y), turn `deg` and look down `tilt`.
+    c2w = sc["c2w"][frame].astype(np.float64).copy()
+    up = np.array([0.0, -1.0, 0.0])
+    fwd = c2w[:3, 2] - (c2w[:3, 2] @ up) * up
+    fwd /= np.linalg.norm(fwd)
+    c2w[:3, 3] += rise * up - back * fwd
+    c2w[:3, :3] = _axis_angle(up, deg) @ c2w[:3, :3] @ _axis_angle(np.array([1.0, 0, 0]), -tilt)
+    view = np.linalg.inv(c2w)
+    b = store.minecraft_build(rid, "auto", kblocks, frame=frame)
+    panels = [Image.fromarray(rgb).resize(hw[::-1], Image.LANCZOS), splat(P, C, size, Ko, view, hw), blocks(b, Ko, view, hw)]
+    gap = 12
+    fig = Image.new("RGB", (WIDTH * 3 + gap * 2, hw[0]), BG)
+    for i, p in enumerate(panels):
+        fig.paste(p, (i * (WIDTH + gap), 0))
+    fig.save(out, quality=86)
+    print(f"{out}: {fig.size[0]}x{fig.size[1]}, {len(b.ijk):,} blocks")
+
+
 def _save_gif(frames: list[Image.Image], out: str, ms: int, colors: int = 128) -> None:
     pal = frames[len(frames) // 2].quantize(colors=colors, method=Image.Quantize.MEDIANCUT)
     q = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
@@ -201,4 +241,4 @@ def walk(rid: str, out: str, steps: int = 2, stride: int = 3) -> None:
 
 
 if __name__ == "__main__":
-    {"triptych": triptych, "build": build, "orbit": orbit, "walk": walk}[sys.argv[1]](*sys.argv[2:4])
+    {"triptych": triptych, "build": build, "scene": scene, "orbit": orbit, "walk": walk}[sys.argv[1]](*sys.argv[2:4], *map(float, sys.argv[4:]))
