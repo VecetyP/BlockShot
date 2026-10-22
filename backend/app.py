@@ -198,41 +198,41 @@ def _check_minecraft(rid: str, mode: str, value: float) -> None:
 
 
 @app.post("/runs/{rid}/minecraft/build")
-def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
     """Starts a job that builds the blocks; its result is the build summary."""
     _check_minecraft(rid, mode, value)
-    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame))
+    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame, above))
 
 
 @app.get("/runs/{rid}/minecraft.json")
-def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
     """Build summary: dimensions, block count, block size, FOV, pitch, paste offset, tiles."""
     _check_minecraft(rid, mode, value)
-    return store.minecraft_info(rid, mode, value, frame=frame)
+    return store.minecraft_info(rid, mode, value, frame=frame, above=above)
 
 
 @app.get("/runs/{rid}/minecraft.bin")
-def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
     _check_minecraft(rid, mode, value)
-    return Response(store.minecraft_preview_bin(rid, mode, value, frame), media_type="application/octet-stream")
+    return Response(store.minecraft_preview_bin(rid, mode, value, frame, above), media_type="application/octet-stream")
 
 
 @app.get("/runs/{rid}/minecraft.schem")
-def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
     """One Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
     _check_minecraft(rid, mode, value)
     try:
-        data, filename = store.minecraft_schem(rid, mode, value, frame)
+        data, filename = store.minecraft_schem(rid, mode, value, frame, above)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/runs/{rid}/minecraft/tiles")
-def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
     """Starts a job writing the build as a zip of tiles; its result is the download URL."""
     _check_minecraft(rid, mode, value)
-    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame)}")
+    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame, above)}")
 
 
 @app.get("/runs/{rid}/exports/{name}")

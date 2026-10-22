@@ -93,11 +93,14 @@ How it works (`backend/video.py`):
    frame of reference, so a frame that comes back to something already seen agrees with the first
    view of it.
 2. MoGe, on six frames, sets the scale in metres.
-3. **Ghost removal.** A point is dropped when more frames saw straight through it (it floats in front
+3. **Levelling.** The scene is turned so its floors are horizontal and walls vertical, found the same
+   way as for images, so a phone held at an angle (36 degrees in one test clip) still gives a level
+   scene and build.
+4. **Ghost removal.** A point is dropped when more frames saw straight through it (it floats in front
    of everything they saw near there) than saw it. Glass reflections and the edges of objects go;
    walls, perforated screens and shiny floors that many frames agree on stay. It can also remove a
    person walking through the shot.
-4. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
+5. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
    pixels of each frame, so close walls don't come out as sparse dots.
 
 Why VGGT's depth and not MoGe's: on a 24-frame clip of a kitchen, walking and turning around, two
@@ -136,7 +139,11 @@ other, so it grows with the square of the frame count: 7 s for 24 frames, roughl
 
 1. **Point cloud.** The chosen model predicts a 3D point for every pixel, in the camera's frame.
 2. **Axes.** The cloud is turned into Minecraft's axes with the camera facing south (+z), so the
-   image's right side goes west. Video scenes line the grid up with the first frame, with "up"
+   image's right side goes west. "Up" comes from the picture's structure: floors, roofs and walls
+   are square to each other, so the build finds those three axes from the surface directions and
+   takes the one nearest the camera's own up. A tilted photo, or a city shot 40 degrees from above,
+   still builds level, and the card gives the pitch to look down at it. For a map shot straight down,
+   tick **Seen from above** (straight down, the ground's axis and a wall's are a toss-up). Video scenes line the grid up with the first frame, with "up"
    averaged over all frames, and are built once: choosing another frame only changes where you
    stand, your yaw and pitch, and the FOV.
 3. **Blocks.** The surface between neighbouring pixels is filled in, except across depth jumps, and

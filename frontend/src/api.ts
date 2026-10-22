@@ -150,7 +150,7 @@ export const renderOffAxis = (id: string, onProgress?: OnProgress) =>
 
 /** How blocks are sized. auto: about `value` thousand blocks; meters: one block = value m; fit: longest side. */
 export type BuildMode = "auto" | "meters" | "fit";
-export type BuildSettings = { mode: BuildMode; value: number };
+export type BuildSettings = { mode: BuildMode; value: number; above?: boolean }; // above: a top-down picture (images only)
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks
   blocks: number;
@@ -169,7 +169,7 @@ export type MinecraftInfo = {
   top_blocks: [string, number][];
 };
 // `frame`: for scenes, the frame whose camera is the standing spot.
-const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}`;
+const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}&above=${!!b.above}`;
 /** axes: row-major 3x3, columns = Minecraft east, up, south in cloud coordinates; origin: the eye. */
 export type BlockPreview = { n: number; size: number; lo: Float32Array; axes: Float32Array; origin: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 

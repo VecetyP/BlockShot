@@ -177,3 +177,48 @@ def test_view_from_another_camera_matches_building_from_it():
     assert np.abs(world - centre).max() < base.block_size  # within the offset's rounding
     # The space around the new eye is cleared.
     assert (np.linalg.norm(v.ijk + 0.5 - v.camera, axis=1) > mc.CLEAR_BLOCKS).all()
+
+
+def test_find_up_finds_a_tilted_floor_among_walls():
+    # Normals of a floor tilted 12 degrees (and a ceiling, facing down), plus many more walls and some
+    # slanted junk; the prior is the untilted y axis.
+    rng = np.random.default_rng(3)
+    t = math.radians(12)
+    true_up = np.array([0.0, math.cos(t), math.sin(t)])
+    noisy = lambda v, k: v + rng.normal(0, 0.05, (k, 3))
+    floor = noisy(true_up, 3000)
+    ceiling = noisy(-true_up, 1000)
+    side = np.cross(true_up, [1.0, 0, 0]); side /= np.linalg.norm(side)
+    walls = np.vstack([noisy(side, 3000), noisy(np.cross(true_up, side), 3000)])  # two wall directions
+    junk = rng.normal(size=(2000, 3))
+    N = np.vstack([floor, ceiling, walls, junk])
+    N /= np.linalg.norm(N, axis=1, keepdims=True)
+    up, share = mc.find_up(N, np.array([0.0, 1.0, 0.0]))
+    assert math.degrees(math.acos(min(1.0, up @ true_up))) < 1.0 and share > 0.3
+    R = mc.rotation_between(up, np.array([0.0, -1.0, 0.0]))
+    assert np.allclose(R @ up, [0, -1, 0]) and np.isclose(np.linalg.det(R), 1)
+
+
+def test_grid_normals_of_a_plane():
+    v, u = np.mgrid[0:40, 0:60].astype(float)
+    P = np.stack([u, np.full_like(u, 2.0) + 0.1 * u, v], -1)  # plane y = 2 + 0.1 x
+    N = mc.grid_normals(P, np.ones((40, 60), bool))
+    n = np.array([-0.1, 1.0, 0.0]) / math.hypot(0.1, 1)
+    assert len(N) > 50 and np.allclose(np.abs(N @ n), 1)
+
+
+def test_seen_from_above_builds_a_top_down_picture_flat():
+    # Ground 30 m below a camera looking straight down, with a few 3 m buildings on it.
+    h, w = 96, 128
+    K = np.array([[100.0, 0, w / 2], [0, 100.0, h / 2], [0, 0, 1]])
+    depth = np.full((h, w), 30.0)
+    depth[20:40, 30:50] = 27.0
+    depth[60:80, 80:110] = 27.0
+    pts = unproject(depth.astype(np.float32), K)
+    rgb = np.full((h, w, 3), 100, np.uint8)
+    mask = np.ones((h, w), bool)
+    b = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5, above=True)
+    assert b.dims[1] <= 12  # 3 m of buildings at 0.5 m blocks: a flat map, not a 40 m wall
+    assert b.pitch_deg > 80  # looking down at it
+    side = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5)
+    assert side.dims[1] > 30  # without the option it stands up like a wall

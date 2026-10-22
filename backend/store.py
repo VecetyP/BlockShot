@@ -308,15 +308,17 @@ _build_lock = threading.Lock()  # one build at a time, and never the same build 
 MAX_CACHED_BUILDS = 4
 
 
-def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> minecraft.Build:
+def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int = 0, above: bool = False) -> minecraft.Build:
     """Image runs: viewed from the input camera. Scenes: built once, then viewed from frame
     `frame`'s camera (only the standing spot, yaw, pitch and FOV change between frames)."""
-    b = _base_build(rid, mode, value, progress)
-    return _scene_view(rid, b, frame) if is_scene(rid) else b
+    if is_scene(rid):
+        return _scene_view(rid, _base_build(rid, mode, value, progress), frame)
+    return _base_build(rid, mode, value, progress, above)
 
 
-def _base_build(rid: str, mode: str, value: float, progress=None) -> minecraft.Build:
-    key = (rid, mode, float(value))
+def _base_build(rid: str, mode: str, value: float, progress=None, above: bool = False) -> minecraft.Build:
+    """`above`: image runs only, the picture looks down on the ground (see build_from_image)."""
+    key = (rid, mode, float(value), above)
     if key in _builds:
         return _builds[key]
     say = progress or (lambda *a, **k: None)
@@ -330,7 +332,7 @@ def _base_build(rid: str, mode: str, value: float, progress=None) -> minecraft.B
                 b = _scene_build(rid, mode, value, say)
             else:
                 a = load_arrays(rid)
-                b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say)
+                b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say, above=above)
             while len(_builds) >= MAX_CACHED_BUILDS:
                 _builds.pop(next(iter(_builds)))
             _builds[key] = b
@@ -339,8 +341,8 @@ def _base_build(rid: str, mode: str, value: float, progress=None) -> minecraft.B
         _build_lock.release()
 
 
-def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> dict:
-    b = minecraft_build(rid, mode, value, progress, frame)
+def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int = 0, above: bool = False) -> dict:
+    b = minecraft_build(rid, mode, value, progress, frame, above)
     counts = np.bincount(b.block, minlength=len(minecraft.BLOCK_NAMES))
     top = [(minecraft.BLOCK_NAMES[i], int(counts[i])) for i in np.argsort(-counts)[:8] if counts[i]]
     _, _, _, lod = minecraft.preview(b) if len(b.ijk) > minecraft.PREVIEW_MAX else (None, None, None, 1)
@@ -367,34 +369,34 @@ def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int 
 TILE = 128
 
 
-def minecraft_preview_bin(rid: str, mode: str, value: float, frame: int = 0) -> bytes:
+def minecraft_preview_bin(rid: str, mode: str, value: float, frame: int = 0, above: bool = False) -> bytes:
     """uint32 N, float32 cube_size, float32 lo[3], float32 axes[9], float32 origin[3],
     int16 ijk[N*3], uint8 rgb[N*3] (block colours).
     Cube (i, j, k) spans lo + [ijk, ijk+1) * cube_size in Minecraft axes; a Minecraft-axes point m is
     origin + axes @ m in the cloud's coordinates (axes row-major, columns = east, up, south). Big
     builds are previewed with merged cubes (cube_size is then a multiple of the block size)."""
-    b = minecraft_build(rid, mode, value, frame=frame)
+    b = minecraft_build(rid, mode, value, frame=frame, above=above)
     ijk, rgb, size, _ = minecraft.preview(b)
     axes, _ = minecraft._basis(b.pose)
     head = np.uint32(len(ijk)).tobytes() + np.array([size, *b.lo, *axes.ravel(), *b.pose.position], "<f4").tobytes()
     return head + ijk.astype("<i2").tobytes() + rgb.astype(np.uint8).tobytes()
 
 
-def _export_name(rid: str, mode: str, value: float, frame: int = 0) -> str:
+def _export_name(rid: str, mode: str, value: float, frame: int = 0, above: bool = False) -> str:
     stem = Path(str(load_meta(rid).get("source") or rid)).stem
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)[:40] or "build"
-    view = f"_f{frame}" if is_scene(rid) else ""
+    view = f"_f{frame}" if is_scene(rid) else "_above" if above else ""
     return f"{safe}_{model_of(rid)}_{mode}{value:g}{view}".replace(".", "p")
 
 
-def minecraft_schem(rid: str, mode: str, value: float, frame: int = 0) -> tuple[bytes, str]:
-    return minecraft.whole(minecraft_build(rid, mode, value, frame=frame)), _export_name(rid, mode, value, frame) + ".schem"
+def minecraft_schem(rid: str, mode: str, value: float, frame: int = 0, above: bool = False) -> tuple[bytes, str]:
+    return minecraft.whole(minecraft_build(rid, mode, value, frame=frame, above=above)), _export_name(rid, mode, value, frame, above) + ".schem"
 
 
-def minecraft_zip(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> str:
+def minecraft_zip(rid: str, mode: str, value: float, progress=None, frame: int = 0, above: bool = False) -> str:
     """Writes the tiles zip into runs/<id>/exports/ and returns its file name."""
-    b = minecraft_build(rid, mode, value, progress, frame)
-    name = _export_name(rid, mode, value, frame) + ".zip"
+    b = minecraft_build(rid, mode, value, progress, frame, above)
+    name = _export_name(rid, mode, value, frame, above) + ".zip"
     d = RUNS / rid / "exports"
     d.mkdir(exist_ok=True)
     data = minecraft.tiles_zip(b, name[:-4], TILE, progress or (lambda *a, **k: None))
@@ -512,12 +514,12 @@ def scene_points(rid: str) -> tuple[np.ndarray, np.ndarray]:
     return _scene_clouds[rid]
 
 
-def _scene_pose(sc: dict, frame: int) -> tuple[minecraft.Pose, float]:
-    """Frame `frame`'s camera, with "up" averaged over all frames so floors come out level; and its
-    vertical FOV."""
+def _scene_pose(sc: dict, frame: int, levelled: bool) -> tuple[minecraft.Pose, float]:
+    """Frame `frame`'s camera and its vertical FOV. "Up" is the scene's -y when it was levelled by its
+    floor (video.reconstruct does that), else the cameras' up averaged over all frames."""
     c2w = sc["c2w"].astype(np.float64)
     frame = int(np.clip(frame, 0, len(c2w) - 1))
-    up = -c2w[:, :3, 1].mean(0)  # cameras' up (-y), averaged
+    up = np.array([0.0, -1.0, 0.0]) if levelled else -c2w[:, :3, 1].mean(0)
     fov = math.degrees(2 * math.atan(sc["depth"].shape[1] / 2 / float(sc["K"][frame][1, 1])))
     return minecraft.Pose(c2w[frame, :3, 3], c2w[frame, :3, 2], up), fov
 
@@ -526,9 +528,9 @@ def _scene_build(rid: str, mode: str, value: float, say) -> minecraft.Build:
     """The scene's blocks, with the grid lined up with frame 0 (any frame works: view_from moves the
     viewer). The space around the eye is cleared per frame by view_from."""
     sc = load_scene(rid)
-    pose, fov = _scene_pose(sc, 0)
+    pose, fov = _scene_pose(sc, 0, bool(load_meta(rid).get("levelled")))
     return minecraft.build_from_grids(_scene_grids(sc), pose, fov, mode, value, progress=say, clear=False)
 
 
 def _scene_view(rid: str, b: minecraft.Build, frame: int) -> minecraft.Build:
-    return minecraft.view_from(b, *_scene_pose(load_scene(rid), frame))
+    return minecraft.view_from(b, *_scene_pose(load_scene(rid), frame, bool(load_meta(rid).get("levelled"))))

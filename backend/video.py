@@ -29,11 +29,12 @@ import cv2
 import numpy as np
 from scipy.ndimage import binary_dilation, binary_opening, grey_erosion, label, sobel
 
+from . import minecraft
 from .models import registry
 from .models import vggt as vggt_model
 from .models.base import unproject
 
-PIPELINE = 6  # bump when reconstruction changes, so cached scenes are rebuilt (6: portrait frames at 518 tall, sampled ghost judges)
+PIPELINE = 8  # bump when reconstruction changes, so cached scenes are rebuilt (8: levelled by floors and walls)
 PASS_PATCHES = 40_000  # image patches VGGT gets in one pass: 51 phone frames (58 portrait frames, 45k patches, peaked at 11.8 GB)
 # Longer clips go in overlapping chunks of that size, a quarter shared, joined on the shared frames.
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
@@ -316,6 +317,19 @@ def reconstruct(path: str, s: Settings, progress=_quiet) -> dict:
     mask = free_space_filter(depth, mask, vg["K"], vg["c2w"], progress)
     stats["ghosts_removed"] = round(1 - int(mask.sum()) / max(before, 1), 4)
     timings["ghosts"] = time.perf_counter() - t
+
+    # Level the scene: floors horizontal, walls vertical (up = -y, as in a level OpenCV camera).
+    # Frame 0's camera stays at the origin; only its orientation changes.
+    c2w = vg["c2w"]
+    N = np.concatenate([minecraft.grid_normals(world_points(depth[i], vg["K"][i], c2w[i]), mask[i]) for i in range(n)])
+    rough = -c2w[:, :3, 1].mean(0)  # the cameras' average up
+    up, share = minecraft.find_up(N, rough)
+    stats["frame0_tilt_deg"] = round(float(np.degrees(np.arccos(np.clip(up @ -c2w[0, :3, 1], -1, 1)))), 1)
+    R = minecraft.rotation_between(up, np.array([0.0, -1.0, 0.0]))
+    c2w[:, :3, :3] = R @ c2w[:, :3, :3]
+    c2w[:, :3, 3] = c2w[:, :3, 3] @ R.T
+    stats["levelled"] = True
+    stats["level_share"] = round(share, 3)  # of surface normals lined up with "up" (level or vertical)
 
     scene = {"rgb": np.stack(frames), "depth": depth.astype(np.float32), "mask": mask, "K": vg["K"],
              "c2w": vg["c2w"], "hud": hud, "scale_kind": scale_kind}
