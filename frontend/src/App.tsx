@@ -325,6 +325,7 @@ function SceneStrip({ run, build, frame, onFrame }: { run: api.RunMeta; build: a
   }));
   return (
     <div className="strip">
+      <MinecraftCard run={run} settings={build} frame={frame} />
       {items.map((it, i) => (
         <figure key={it.src} className={`tile ${i === frame ? "current" : ""}`}>
           <button className="thumb" onClick={() => onFrame(i)} onDoubleClick={() => setOpen(i)} aria-label={`View from frame ${i}`} title="Click: view from here · double-click: enlarge">
@@ -333,7 +334,6 @@ function SceneStrip({ run, build, frame, onFrame }: { run: api.RunMeta; build: a
           <figcaption>{i}</figcaption>
         </figure>
       ))}
-      <MinecraftCard run={run} settings={build} frame={frame} />
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -379,6 +379,7 @@ function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean
   );
   return (
     <div className="strip">
+      {hasDepth && <MinecraftCard run={run} settings={build} frame={0} />}
       {tile(0, `${label} · input`,
         showTears &&
           tears.map((t, i) => (
@@ -402,7 +403,6 @@ function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean
           <button className="offaxis" onClick={renderOffAxis}>Off-axis renders</button>
         )
       )}
-      {hasDepth && <MinecraftCard run={run} settings={build} frame={0} />}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
