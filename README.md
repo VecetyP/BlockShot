@@ -117,8 +117,12 @@ per-frame scale fixes a bend. VGGT's depth is predicted together with the poses;
 82% agree and 2.9% float, keeping 97% of the pixels. It is faster too: 47 s instead of 104 s for
 that clip. (A stricter first version reached 0.4%, but kept only 58% of a hallway clip: dropping
 VGGT's least confident pixels took plain walls and shiny floors with them, and the filter took a
-perforated brick wall. Now 94% of that hallway stays. Unsure pixels are only dropped when far away:
-sky.)
+perforated brick wall. Now 94% of that hallway stays. Unsure pixels are only dropped when far away.)
+
+The sky is removed by MoGe's mask, a quick coarse pass on every frame (about 0.25 s each). A plain
+sky gives VGGT nothing to measure, so it places it just past the walls. On a playground clip, where
+sky covered 40% of each frame, up to 66% of it stayed in the scene as a pale dome. With the mask, 1%
+stays, and three indoor clips lost none of their points to it.
 
 Measured on an RTX 3080 Laptop (16 GB) with a synthetic 10 s room walkthrough rendered from known
 camera poses (20 frames at 640 × 360):
@@ -180,7 +184,7 @@ Measured on the Courtyard preset (60 frames at 4 per second, VGGT):
 
 | | camera angle | camera position | depth | surface |
 |---|---|---|---|---|
-| Autopilot loop | 0.8° | 44 cm over a 72 m path | 2.6% | 19 cm |
+| Autopilot loop | 0.8° | 44 cm over a 72 m path | 2.6% | 13 cm |
 | Zig-zag | 1.1° | 47 cm | 3.5% | 17 cm |
 | Zig-zag with HUD, arms, head bob, fast turns | 31.8° | 7.8 m | 6.7% | 32 cm |
 

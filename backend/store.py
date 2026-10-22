@@ -259,7 +259,7 @@ def recompute(rid: str, progress=None) -> str:
         if frames is not None:
             s = video.Settings(**{**meta.get("settings", {}), "geometry": video.Settings.geometry})
             new = _scene_id(meta["image_sha256"], s)
-            kept = {k: meta[k] for k in ("video_fps", "frames_read", "duplicates_dropped") if k in meta}
+            kept = {k: meta[k] for k in ("video_fps", "frames_read", "duplicates_dropped", "frame_times_s") if k in meta}
             say("waiting for the GPU")
             with _gpu_lock:
                 try:

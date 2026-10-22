@@ -6,7 +6,7 @@
    camera pose, intrinsics and depth in one frame of reference: the first frame's camera.
 4. Depth: VGGT's own (default), predicted jointly with the poses, so frames agree with each other;
    or MoGe's sharper per-frame depth bent onto VGGT's smooth shape. MoGe on a few frames sets the
-   scale in metres either way.
+   scale in metres either way. MoGe's mask (a quick, coarse pass on every frame) removes the sky.
 5. Free-space filter: a pixel is a ghost, and dropped, when more frames saw straight through it
    (it floats in front of every surface they saw near there) than saw it.
 
@@ -34,7 +34,7 @@ from .models import registry
 from .models import vggt as vggt_model
 from .models.base import unproject
 
-PIPELINE = 8  # bump when reconstruction changes, so cached scenes are rebuilt (8: levelled by floors and walls)
+PIPELINE = 9  # bump when reconstruction changes, so cached scenes are rebuilt (9: sky removed by MoGe)
 PASS_PATCHES = 40_000  # image patches VGGT gets in one pass: 51 phone frames (58 portrait frames, 45k patches, peaked at 11.8 GB)
 # Longer clips go in overlapping chunks of that size, a quarter shared, joined on the shared frames.
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
@@ -299,6 +299,15 @@ def reconstruct_frames(frames: list[np.ndarray], s: Settings, stats: dict, timin
     depth = vg["depth"].copy()
     t = time.perf_counter()
     moge = registry.get("moge")
+    # A plain sky gives VGGT nothing to measure, so it puts it just past the walls (1.7-5x the median
+    # depth on a playground clip, and it covered 40% of each frame: too much for the cut above). MoGe's
+    # mask marks it.
+    sky = np.zeros_like(mask)
+    for i in range(n):
+        progress("finding the sky (MoGe)", i, n)
+        sky[i] = moge.sky(frames[i])
+    mask &= ~sky
+    stats["sky_fraction"] = round(float(sky.mean()), 4)
     # MoGe for the scale in metres (a few frames), or for every frame's depth.
     which = range(n) if s.geometry == "moge" else np.unique(np.linspace(0, n - 1, min(n, METRIC_FRAMES)).round().astype(int))
     ratios = []
