@@ -105,3 +105,15 @@ def test_free_space_filter_drops_a_ghost_that_other_frames_see_through():
     keep = V.free_space_filter(depth, mask, np.repeat(K[None], 3, 0), V.c2w_from_extrinsics(E))
     assert not keep[0, 16:24, 26:34].any()  # the ghost is gone
     assert keep[0, :10].all() and keep[1:].all()  # the wall stays
+
+
+def test_free_space_filter_keeps_points_where_other_frames_have_no_depth():
+    # Frame 0 sees a wall; frames 1 and 2 have no valid depth at all (masked out): no evidence of a
+    # ghost, so nothing may be dropped.
+    h, w = 40, 60
+    K = np.array([[50.0, 0, w / 2], [0, 50.0, h / 2], [0, 0, 1]])
+    E, depth = _wall_frames([np.array([0.2 * i, 0.0, 0.0]) for i in range(3)], K, h, w)
+    mask = np.ones(depth.shape, bool)
+    mask[1:] = False
+    keep = V.free_space_filter(depth, mask, np.repeat(K[None], 3, 0), V.c2w_from_extrinsics(E))
+    assert keep[0].all()

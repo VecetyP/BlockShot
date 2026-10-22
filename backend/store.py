@@ -416,7 +416,7 @@ def process_video(data: bytes, filename: str | None, settings: dict, progress=No
     say = progress or (lambda *a, **k: None)
     s = video.Settings(**settings)
     sha = hashlib.sha256(data).hexdigest()
-    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version
+    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version + f"p{video.PIPELINE}"
     rid = f"{sha[:16]}_scene_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
     d = RUNS / rid
     if (d / "meta.json").exists():

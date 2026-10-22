@@ -7,15 +7,17 @@
 4. Depth: VGGT's own (default), predicted jointly with the poses, so frames agree with each other;
    or MoGe's sharper per-frame depth bent onto VGGT's smooth shape. MoGe on a few frames sets the
    scale in metres either way.
-5. Free-space filter: a pixel that lands clearly in front of what other frames saw (space they saw
-   through) is a ghost, and is dropped.
+5. Free-space filter: a pixel is a ghost, and dropped, when more frames saw straight through it
+   (it floats in front of every surface they saw near there) than saw it.
 
 Measured on a turning-around room clip (24 frames), share of overlapping points that two frames
 agree on within 5% / that float in front of another frame's surface ("ghosts"):
   MoGe, one scale per frame (before)  62% / 12.8%
   MoGe bent onto VGGT's shape          70% / 9.9%
-  VGGT depth                           85% / 2.9%
-  VGGT depth + free-space filter       90% / 0.4%  (keeps 94% of pixels)
+  VGGT depth + free-space filter       82% / 2.9%  (keeps 97% of pixels)
+The filter's first version (any 2 frames seeing through, exact pixel; together with a cut of VGGT's
+least confident 20%) got 0.4% there, but kept only 58% of a hallway clip: the cut took plain walls
+and shiny floors, the filter a perforated brick wall (other frames see through its holes). Now 94%.
 
 The scene is kept as per-frame grids (depth, colour, mask, K, camera-to-world) so later steps can
 fill surfaces between pixels; `world_points` turns a frame into points in scene coordinates.
@@ -25,19 +27,22 @@ from dataclasses import asdict, dataclass
 
 import cv2
 import numpy as np
-from scipy.ndimage import binary_dilation, binary_opening, label, sobel
+from scipy.ndimage import binary_dilation, binary_opening, grey_erosion, label, sobel
 
 from .models import registry
 from .models.base import unproject
 
+PIPELINE = 4  # bump when reconstruction changes, so cached scenes are rebuilt (4: no blanket confidence cut)
 VGGT_ONE_PASS = 96  # frames VGGT handles in one pass (measured on 16 GB: 64 frames peak at 9.8 GB)
 CHUNK, OVERLAP = 64, 16  # longer clips: overlapping chunks, joined on the shared frames
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
-LOW_CONF_PCT = 20  # per frame, the least confident 20% of VGGT's pixels are ignored
+LOW_CONF_PCT = 20  # per frame, VGGT's least confident 20% of pixels are ignored...
+FAR = 4  # ...if they're also this many times farther than the frame's median depth (sky, haze)
 METRIC_FRAMES = 6  # MoGe frames used to put a VGGT-depth scene in metres
 SHAPE_BLUR = 0.05  # MoGe geometry: VGGT's shape is followed at this scale (fraction of the width)
-FREE_SPACE_TOL = 0.05  # a point this much (relative) in front of another frame's surface is a ghost...
-FREE_SPACE_VOTES = 2  # ...once at least this many other frames saw through it
+FREE_SPACE_TOL = 0.05  # a point this much (relative) in front of another frame's surface "floats"...
+FREE_SPACE_WINDOW = 7  # ...in front of every surface that frame saw within this many pixels...
+FREE_SPACE_VOTES = 2  # ...for at least this many frames, and more of them than frames that agree with it
 
 
 @dataclass
@@ -201,15 +206,21 @@ def vggt_poses(frames: list[np.ndarray], progress=_quiet) -> tuple[dict, int]:
 
 
 def free_space_filter(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, c2w: np.ndarray, progress=_quiet) -> np.ndarray:
-    """Mask without ghosts: pixels that land more than FREE_SPACE_TOL in front of the surface other
-    frames saw there (space those frames looked straight through), in FREE_SPACE_VOTES frames or more."""
+    """Mask without ghosts. A pixel "floats" for another frame when it lands more than
+    FREE_SPACE_TOL in front of every surface that frame saw within FREE_SPACE_WINDOW pixels (space
+    it looked straight through), and is "seen" when that frame's surface there agrees with it. It's
+    dropped when it floats for FREE_SPACE_VOTES frames or more, and for more frames than see it.
+    The window keeps perforated walls (others see through the holes, not the wall); counting the
+    frames that agree keeps floors under reflections (read as depth below the floor)."""
     n, h, w = depth.shape
     keep = mask.copy()
     w2c = np.linalg.inv(c2w)
+    nearest = np.stack([grey_erosion(np.where(mask[j], depth[j], np.inf), size=FREE_SPACE_WINDOW) for j in range(n)])
     for i in range(n):
         progress("removing ghosts", i, n)
         P = world_points(depth[i], K[i], c2w[i]).reshape(-1, 3)[mask[i].ravel()]
         votes = np.zeros(len(P), np.int16)
+        seen = np.zeros(len(P), np.int16)
         for j in range(n):
             if j == i:
                 continue
@@ -220,9 +231,10 @@ def free_space_filter(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, c2w: n
             v = (K[j][1, 1] * q[ok, 1] / z[ok] + K[j][1, 2]).astype(np.int64)
             inside = (u >= 0) & (u < w) & (v >= 0) & (v < h)
             ok, u, v = ok[inside], u[inside], v[inside]
-            front = mask[j][v, u] & (z[ok] < depth[j][v, u] * (1 - FREE_SPACE_TOL))
-            votes[ok[front]] += 1
-        keep[i][mask[i]] = votes < FREE_SPACE_VOTES
+            near = nearest[j][v, u]  # inf where that frame has no depth nearby: no evidence either way
+            votes[ok[np.isfinite(near) & (z[ok] < near * (1 - FREE_SPACE_TOL))]] += 1
+            seen[ok[mask[j][v, u] & (np.abs(z[ok] - depth[j][v, u]) <= FREE_SPACE_TOL * depth[j][v, u])]] += 1
+        keep[i][mask[i]] = (votes < FREE_SPACE_VOTES) | (votes <= seen)
     return keep
 
 
@@ -256,9 +268,15 @@ def reconstruct(path: str, s: Settings, progress=_quiet) -> dict:
     timings["poses"] = time.perf_counter() - t
 
     n = len(frames)
-    # Strictly above the 20th percentile: VGGT's confidence often bottoms out at exactly 1, and
-    # ">=" would then keep every pixel.
-    mask = np.stack([(vg["depth"][i] > 0) & (vg["conf"][i] > np.percentile(vg["conf"][i], LOW_CONF_PCT)) for i in range(n)])
+    # Low confidence alone isn't a reason to drop a pixel: VGGT is unsure of plain walls and shiny
+    # floors too (on a hallway clip half the pixels sat at its minimum confidence, and a blanket cut
+    # removed 42% of the floor). The ghost filter catches wrong geometry; this only drops unsure
+    # pixels far away, which is sky.
+    mask = np.zeros(vg["depth"].shape, bool)
+    for i in range(n):
+        d, valid = vg["depth"][i], vg["depth"][i] > 0
+        unsure = vg["conf"][i] <= np.percentile(vg["conf"][i], LOW_CONF_PCT)
+        mask[i] = valid & ~(unsure & (d > FAR * np.median(d[valid])))
     if hud is not None:
         mask &= ~hud
     depth = vg["depth"].copy()

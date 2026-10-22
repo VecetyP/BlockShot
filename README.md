@@ -92,9 +92,10 @@ How it works (`backend/video.py`):
    frame of reference, so a frame that comes back to something already seen agrees with the first
    view of it.
 2. MoGe, on six frames, sets the scale in metres.
-3. **Ghost removal.** A point that lands clearly in front of what two or more other frames saw there
-   (space they looked straight through) is dropped. This also removes people walking through the
-   shot, leaving gaps where they stood.
+3. **Ghost removal.** A point is dropped when more frames saw straight through it (it floats in front
+   of everything they saw near there) than saw it. Glass reflections and the edges of objects go;
+   walls, perforated screens and shiny floors that many frames agree on stay. It can also remove a
+   person walking through the shot.
 4. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
    pixels of each frame, so close walls don't come out as sparse dots.
 
@@ -102,9 +103,12 @@ Why VGGT's depth and not MoGe's: on a 24-frame clip of a kitchen, walking and tu
 frames agree within 5% on 62% of the points they share when each frame uses MoGe's depth. 12.8% of
 points float in space another frame saw as empty, and those ghosts are what makes objects come out
 doubled and see-through. MoGe's guess bends the room a little differently in every frame, and no
-per-frame scale fixes a bend. VGGT's depth is predicted together with the poses: 85% agree and 2.9%
-float; with ghost removal, 90% and 0.4%, keeping 94% of the pixels. It is faster too: 47 s instead
-of 104 s for that clip.
+per-frame scale fixes a bend. VGGT's depth is predicted together with the poses; with ghost removal,
+82% agree and 2.9% float, keeping 97% of the pixels. It is faster too: 47 s instead of 104 s for
+that clip. (A stricter first version reached 0.4%, but kept only 58% of a hallway clip: dropping
+VGGT's least confident pixels took plain walls and shiny floors with them, and the filter took a
+perforated brick wall. Now 94% of that hallway stays. Unsure pixels are only dropped when far away:
+sky.)
 
 Measured on an RTX 3080 Laptop (16 GB) with a synthetic 10 s room walkthrough rendered from known
 camera poses (20 frames at 640 × 360):
