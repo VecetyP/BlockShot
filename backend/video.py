@@ -1,11 +1,21 @@
-"""Video -> one consistent scene: "VGGT for where the camera was, MoGe for what it saw".
+"""Video -> one consistent scene.
 
 1. Sample frames at a fixed rate, drop near-duplicates.
 2. Find a game HUD: pixels that stay still and textured while the scene moves; they're ignored.
 3. VGGT on all frames at once (or overlapping chunks joined by a Sim(3) fit) gives every frame's
    camera pose, intrinsics and depth in one frame of reference: the first frame's camera.
-4. MoGe gives each frame's (metric, sharper) depth; each frame is scaled to agree with VGGT, and
-   the whole scene is then scaled to MoGe's metres.
+4. Depth: VGGT's own (default), predicted jointly with the poses, so frames agree with each other;
+   or MoGe's sharper per-frame depth bent onto VGGT's smooth shape. MoGe on a few frames sets the
+   scale in metres either way.
+5. Free-space filter: a pixel that lands clearly in front of what other frames saw (space they saw
+   through) is a ghost, and is dropped.
+
+Measured on a turning-around room clip (24 frames), share of overlapping points that two frames
+agree on within 5% / that float in front of another frame's surface ("ghosts"):
+  MoGe, one scale per frame (before)  62% / 12.8%
+  MoGe bent onto VGGT's shape          70% / 9.9%
+  VGGT depth                           85% / 2.9%
+  VGGT depth + free-space filter       90% / 0.4%  (keeps 94% of pixels)
 
 The scene is kept as per-frame grids (depth, colour, mask, K, camera-to-world) so later steps can
 fill surfaces between pixels; `world_points` turns a frame into points in scene coordinates.
@@ -24,6 +34,10 @@ VGGT_ONE_PASS = 96  # frames VGGT handles in one pass (measured on 16 GB: 64 fra
 CHUNK, OVERLAP = 64, 16  # longer clips: overlapping chunks, joined on the shared frames
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
 LOW_CONF_PCT = 20  # per frame, the least confident 20% of VGGT's pixels are ignored
+METRIC_FRAMES = 6  # MoGe frames used to put a VGGT-depth scene in metres
+SHAPE_BLUR = 0.05  # MoGe geometry: VGGT's shape is followed at this scale (fraction of the width)
+FREE_SPACE_TOL = 0.05  # a point this much (relative) in front of another frame's surface is a ghost...
+FREE_SPACE_VOTES = 2  # ...once at least this many other frames saw through it
 
 
 @dataclass
@@ -32,7 +46,7 @@ class Settings:
     max_frames: int = 60
     max_side: int = 640
     hud: bool = True  # ignore a static game HUD
-    geometry: str = "moge"  # "moge": VGGT poses + MoGe depth (best); "vggt": VGGT depth (faster)
+    geometry: str = "vggt"  # "vggt": VGGT depth (frames agree); "moge": MoGe detail on VGGT's shape
 
 
 def _quiet(*_, **__):
@@ -186,6 +200,41 @@ def vggt_poses(frames: list[np.ndarray], progress=_quiet) -> tuple[dict, int]:
     return merge_chunks(chunks, starts, n), len(starts)
 
 
+def free_space_filter(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, c2w: np.ndarray, progress=_quiet) -> np.ndarray:
+    """Mask without ghosts: pixels that land more than FREE_SPACE_TOL in front of the surface other
+    frames saw there (space those frames looked straight through), in FREE_SPACE_VOTES frames or more."""
+    n, h, w = depth.shape
+    keep = mask.copy()
+    w2c = np.linalg.inv(c2w)
+    for i in range(n):
+        progress("removing ghosts", i, n)
+        P = world_points(depth[i], K[i], c2w[i]).reshape(-1, 3)[mask[i].ravel()]
+        votes = np.zeros(len(P), np.int16)
+        for j in range(n):
+            if j == i:
+                continue
+            q = P @ w2c[j, :3, :3].T + w2c[j, :3, 3]
+            z = q[:, 2]
+            ok = np.flatnonzero(z > 1e-6)
+            u = (K[j][0, 0] * q[ok, 0] / z[ok] + K[j][0, 2]).astype(np.int64)
+            v = (K[j][1, 1] * q[ok, 1] / z[ok] + K[j][1, 2]).astype(np.int64)
+            inside = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+            ok, u, v = ok[inside], u[inside], v[inside]
+            front = mask[j][v, u] & (z[ok] < depth[j][v, u] * (1 - FREE_SPACE_TOL))
+            votes[ok[front]] += 1
+        keep[i][mask[i]] = votes < FREE_SPACE_VOTES
+    return keep
+
+
+def _onto_shape(fine: np.ndarray, coarse: np.ndarray, ok: np.ndarray) -> np.ndarray:
+    """`fine` depth bent to follow `coarse` depth's smooth shape: fine * blur(coarse / fine)."""
+    r = np.where(ok, np.log(coarse / np.maximum(fine, 1e-6)), 0).astype(np.float32)
+    wgt = ok.astype(np.float32)
+    s = SHAPE_BLUR * fine.shape[1]
+    ratio = cv2.GaussianBlur(r * wgt, (0, 0), s) / np.maximum(cv2.GaussianBlur(wgt, (0, 0), s), 1e-6)
+    return fine * np.exp(ratio)
+
+
 # --- the whole pipeline ---------------------------------------------------------------------------
 
 def reconstruct(path: str, s: Settings, progress=_quiet) -> dict:
@@ -207,33 +256,41 @@ def reconstruct(path: str, s: Settings, progress=_quiet) -> dict:
     timings["poses"] = time.perf_counter() - t
 
     n = len(frames)
-    mask = np.stack([(vg["depth"][i] > 0) & (vg["conf"][i] >= np.percentile(vg["conf"][i], LOW_CONF_PCT)) for i in range(n)])
+    # Strictly above the 20th percentile: VGGT's confidence often bottoms out at exactly 1, and
+    # ">=" would then keep every pixel.
+    mask = np.stack([(vg["depth"][i] > 0) & (vg["conf"][i] > np.percentile(vg["conf"][i], LOW_CONF_PCT)) for i in range(n)])
     if hud is not None:
         mask &= ~hud
     depth = vg["depth"].copy()
-    scale_kind = "relative"
     t = time.perf_counter()
-    if s.geometry == "moge":
-        moge = registry.get("moge")
-        ratios = np.ones(n)
-        for i, f in enumerate(frames):
-            progress("measuring depth (MoGe)", i, n, f"frame {i + 1}/{n}")
-            p = moge.predict(f)
-            registry.free_cache()
-            ok = mask[i] & p.mask & (p.depth > 0)
-            if ok.sum() < 100:
-                mask[i] = False
-                continue
-            ratios[i] = np.median(vg["depth"][i][ok] / p.depth[ok])  # MoGe metres -> this scene's units
-            depth[i] = p.depth * ratios[i]
+    moge = registry.get("moge")
+    # MoGe for the scale in metres (a few frames), or for every frame's depth.
+    which = range(n) if s.geometry == "moge" else np.unique(np.linspace(0, n - 1, min(n, METRIC_FRAMES)).round().astype(int))
+    ratios = []
+    for k, i in enumerate(which):
+        progress("measuring depth (MoGe)", k, len(which), f"frame {i + 1}/{n}")
+        p = moge.predict(frames[i])
+        registry.free_cache()
+        ok = mask[i] & p.mask & (p.depth > 0)
+        if ok.sum() < 100:
+            continue
+        ratios.append(np.median(vg["depth"][i][ok] / p.depth[ok]))  # MoGe metres -> this scene's units
+        if s.geometry == "moge":
+            depth[i] = _onto_shape(p.depth, vg["depth"][i], ok)
             mask[i] &= p.mask
-        # Express the scene in metres: one global scale, so frames stay consistent with each other.
-        R = float(np.median(ratios))
-        depth /= R
-        vg["c2w"][:, :3, 3] /= R
-        stats["scale_spread"] = round(float(ratios.max() / ratios.min()), 3)
-        scale_kind = "metric"
+    # One global scale to metres, so frames stay consistent with each other.
+    R = float(np.median(ratios)) if ratios else 1.0
+    depth /= R
+    vg["c2w"][:, :3, 3] /= R
+    stats["scale_spread"] = round(float(max(ratios) / min(ratios)), 3) if ratios else None
+    scale_kind = "metric" if ratios else "relative"
     timings["depth"] = time.perf_counter() - t
+
+    t = time.perf_counter()
+    before = int(mask.sum())
+    mask = free_space_filter(depth, mask, vg["K"], vg["c2w"], progress)
+    stats["ghosts_removed"] = round(1 - int(mask.sum()) / max(before, 1), 4)
+    timings["ghosts"] = time.perf_counter() - t
 
     scene = {"rgb": np.stack(frames), "depth": depth.astype(np.float32), "mask": mask, "K": vg["K"],
              "c2w": vg["c2w"], "hud": hud, "scale_kind": scale_kind}

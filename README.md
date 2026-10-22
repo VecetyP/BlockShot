@@ -75,7 +75,8 @@ Drop an `mp4`, `mov` or `webm` instead of an image. The options:
 
 - **Frames/s** (default 2) and **Max frames** (default 60): how densely the clip is sampled.
   Near-duplicate frames (a camera standing still) are dropped.
-- **Geometry:** *MoGe depth* (best, in metres) or *VGGT depth* (faster).
+- **Geometry:** *VGGT depth* (default: the frames agree with each other) or *MoGe detail* (sharper
+  per-frame depth bent onto VGGT's shape, but with more ghosting).
 - **Ignore a static game HUD** (on): pixels that stay still while the picture moves, such as a
   crosshair, hotbar or minimap, are left out of the scene.
 
@@ -84,22 +85,33 @@ and a strip of the sampled frames. Click a frame to view the scene, and its buil
 camera. The Minecraft build is seen from the chosen frame, with floors levelled from the average
 camera "up". Stand there in game the same way as for an image.
 
-How it works (`backend/video.py`): **VGGT for where the camera was, MoGe for what it saw.**
+How it works (`backend/video.py`):
 
 1. VGGT reads all frames in one pass (up to 96; longer clips go in overlapping chunks of 64, joined
    with a similarity fit on the shared frames). It gives every frame's camera pose and depth in one
-   frame of reference.
-2. MoGe predicts each frame's depth in metres. Each frame is scaled to agree with VGGT's depth, then
-   the whole scene is scaled back to MoGe's metres.
-3. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
+   frame of reference, so a frame that comes back to something already seen agrees with the first
+   view of it.
+2. MoGe, on six frames, sets the scale in metres.
+3. **Ghost removal.** A point that lands clearly in front of what two or more other frames saw there
+   (space they looked straight through) is dropped. This also removes people walking through the
+   shot, leaving gaps where they stood.
+4. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
    pixels of each frame, so close walls don't come out as sparse dots.
+
+Why VGGT's depth and not MoGe's: on a 24-frame clip of a kitchen, walking and turning around, two
+frames agree within 5% on 62% of the points they share when each frame uses MoGe's depth. 12.8% of
+points float in space another frame saw as empty, and those ghosts are what makes objects come out
+doubled and see-through. MoGe's guess bends the room a little differently in every frame, and no
+per-frame scale fixes a bend. VGGT's depth is predicted together with the poses: 85% agree and 2.9%
+float; with ghost removal, 90% and 0.4%, keeping 94% of the pixels. It is faster too: 47 s instead
+of 104 s for that clip.
 
 Measured on an RTX 3080 Laptop (16 GB) with a synthetic 10 s room walkthrough rendered from known
 camera poses (20 frames at 640 × 360):
 
 | | |
 |---|---|
-| Total time | 51 s: poses 15 s, depth 34 s |
+| Total time (MoGe depth on every frame, before ghost removal) | 51 s: poses 15 s, depth 34 s |
 | Camera rotation error | 0.7° (median) |
 | Camera position error | 2.8 cm (RMS, after aligning scale) |
 | Surface error | 24–28 cm (median) |
@@ -107,7 +119,8 @@ camera poses (20 frames at 640 × 360):
 
 **Limits.** Fast motion, motion blur and blank walls can throw the poses off. Keep the camera moving
 slowly, with each frame overlapping the last. MoGe's metres were 1.56× off on the synthetic room, so
-treat real-size builds from video as approximate.
+treat real-size builds from video as approximate. Ghost removal compares every frame with every
+other, so it grows with the square of the frame count: 7 s for 24 frames, roughly 40 s for 60.
 
 ## How a build is made
 

@@ -461,7 +461,7 @@ def _save_scene(d: Path, rid: str, sc: dict, source: str | None, sha: str) -> di
         "cameras": [{"c2w": c.tolist(), "K": k.tolist()} for c, k in zip(sc["c2w"], sc["K"])],
         "has_confidence": False,
         "has_normals": False,
-        "depth_source": "video: VGGT poses + " + ("MoGe depth" if sc["scale_kind"] == "metric" else "VGGT depth"),
+        "depth_source": "video: VGGT poses + " + ("MoGe depth on VGGT's shape" if sc["stats"]["settings"]["geometry"] == "moge" else "VGGT depth"),
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         **sc["stats"],
     }

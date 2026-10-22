@@ -427,7 +427,7 @@ export default function App() {
   const [frames, setFrames] = useState<Record<string, number>>({}); // scene id -> frame viewed from
   const frameOf = (id: string) => frames[id] ?? 0;
   const setFrame = (id: string) => (i: number) => setFrames((f) => ({ ...f, [id]: i }));
-  const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "moge" });
+  const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
     setNavState((n) => {
@@ -512,8 +512,8 @@ export default function App() {
             <label className="slider">
               <span>Geometry</span>
               <select value={video.geometry} onChange={(e) => setVideo((v) => ({ ...v, geometry: e.target.value as api.VideoSettings["geometry"] }))}>
-                <option value="moge">MoGe depth (best, metres)</option>
-                <option value="vggt">VGGT depth (faster)</option>
+                <option value="vggt">VGGT depth (frames agree, recommended)</option>
+                <option value="moge">MoGe detail (sharper, more ghosts)</option>
               </select>
             </label>
             <label>

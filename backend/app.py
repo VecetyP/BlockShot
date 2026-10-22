@@ -85,7 +85,7 @@ def process_video(
     max_frames: int = Form(60),
     max_side: int = Form(640),
     hud: bool = Form(True),
-    geometry: str = Form("moge"),
+    geometry: str = Form("vggt"),
 ):
     """Starts a job reconstructing one scene from a video; its result is {id, cached, meta}."""
     if not (0.2 <= fps <= 15 and 2 <= max_frames <= 300 and 256 <= max_side <= 1280 and geometry in ("moge", "vggt")):

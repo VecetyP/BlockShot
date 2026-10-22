@@ -91,3 +91,17 @@ def test_sample_frames_drops_duplicates_and_caps_count(tmp_path):
     assert 18 <= len(frames) <= 22 and frames[0].shape == (90, 160, 3)
     frames, _ = V.sample_frames(path, V.Settings(fps=10, max_frames=5))
     assert len(frames) == 5
+
+
+def test_free_space_filter_drops_a_ghost_that_other_frames_see_through():
+    # Three cameras side by side looking at a wall 6 m away. Frame 0 also has a patch at 3 m that
+    # the others don't see: space they saw straight through, so it's a ghost.
+    h, w = 40, 60
+    K = np.array([[50.0, 0, w / 2], [0, 50.0, h / 2], [0, 0, 1]])
+    centres = [np.array([0.2 * i, 0.0, 0.0]) for i in range(3)]
+    E, depth = _wall_frames(centres, K, h, w)
+    depth[0, 15:25, 25:35] = 3.0
+    mask = np.ones(depth.shape, bool)
+    keep = V.free_space_filter(depth, mask, np.repeat(K[None], 3, 0), V.c2w_from_extrinsics(E))
+    assert not keep[0, 16:24, 26:34].any()  # the ghost is gone
+    assert keep[0, :10].all() and keep[1:].all()  # the wall stays
