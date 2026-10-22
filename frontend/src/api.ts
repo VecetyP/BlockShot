@@ -35,6 +35,8 @@ const json = async <T,>(r: Response): Promise<T> => {
   return r.json();
 };
 
+/** stale: the server is running older code than is on disk, so it needs restarting. */
+export const getHealth = () => fetch(`${API}/health`).then(json<{ stale: boolean }>);
 export const getModels = () => fetch(`${API}/models`).then(json<ModelInfo[]>);
 export const getRuns = () => fetch(`${API}/runs`).then(json<RunMeta[]>);
 export const getRun = (id: string) => fetch(`${API}/runs/${id}`).then(json<RunMeta>);

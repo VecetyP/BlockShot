@@ -1,5 +1,7 @@
 import io
 import logging
+import time
+from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
@@ -25,6 +27,15 @@ def _image_run(rid: str) -> None:
     _run_or_404(rid)
     if store.is_scene(rid):
         raise HTTPException(400, "not available for video scenes")
+
+
+_STARTED = time.time()
+
+
+@app.get("/health")
+def health():
+    """`stale`: the backend's code changed on disk after this server started (it needs a restart)."""
+    return {"stale": any(p.stat().st_mtime > _STARTED for p in Path(__file__).parent.rglob("*.py"))}
 
 
 @app.get("/models")

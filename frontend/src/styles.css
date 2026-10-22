@@ -145,7 +145,13 @@ kbd {
   .history li > button:not(.delete) { padding-right: 46px; } /* always shown: keep the text clear of it */
 }
 
-main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+main:not(:has(> .banner)) { grid-template-rows: auto minmax(0, 1fr) auto; }
+.banner {
+  margin: 0; padding: 8px 16px; font-size: 13px; line-height: 1.4; color: var(--text);
+  background: rgb(255 179 107 / 0.12); border-bottom: 1px solid rgb(255 179 107 / 0.35);
+}
+.banner code { font: 12px ui-monospace, Consolas, monospace; color: var(--warn); }
 .toolbar {
   display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 10px 16px;
   background: var(--surface); border-bottom: 1px solid var(--line);
@@ -278,7 +284,8 @@ a.button.primary:hover { background: #74b7ff; }
   .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); height: auto; min-height: 100vh; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
   .history { max-height: 30vh; margin-bottom: 0; padding-bottom: 0; }
-  main { grid-template-rows: auto 70vh auto; }
+  main, main:not(:has(> .banner)) { grid-template-rows: auto 70vh auto; }
+  main:has(> .banner) { grid-template-rows: auto auto 70vh auto; }
   .hint { display: none; }
   .toolbar { position: relative; }
   .popover { position: static; }

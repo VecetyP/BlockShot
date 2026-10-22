@@ -479,6 +479,14 @@ export default function App() {
   const setFrame = (id: string) => (i: number) => setFrames((f) => ({ ...f, [id]: i }));
   const [above, setAbove] = useState(false); // the next picture is a top-down map
   const [reloads, setReloads] = useState(0); // bumped after a recompute: open panels load the new data
+  const [stale, setStale] = useState(false); // the backend runs older code than is on disk
+  useEffect(() => {
+    // A server without /health (404) predates it, so it's older too.
+    const check = () => api.getHealth().then((h) => setStale(h.stale)).catch((e) => setStale(String(e).startsWith("Error: 404")));
+    check();
+    const t = window.setInterval(check, 30_000);
+    return () => window.clearInterval(t);
+  }, []);
   const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
@@ -666,6 +674,11 @@ export default function App() {
       </aside>
 
       <main>
+        {stale && (
+          <p className="banner" role="status">
+            BlockShot was updated while it was running. Close both BlockShot windows and run <code>run.bat</code> again to use the new version.
+          </p>
+        )}
         <div className="toolbar">
           <div className="segmented" role="radiogroup" aria-label="Color mode">
             {COLOR_MODES.map((m) => (
