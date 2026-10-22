@@ -545,9 +545,9 @@ export default function App() {
   };
 
   const recompute = async () => {
-    const targets = selectedRuns;
+    const targets = outdatedRuns;
     const scenes = targets.filter(api.isScene).length;
-    if (!window.confirm(`Recompute ${targets.length} run${targets.length > 1 ? "s" : ""} with the current version?` +
+    if (!window.confirm(`Redo ${targets.length} run${targets.length > 1 ? "s" : ""} made by an older version of BlockShot?` +
       (scenes ? ` Video scenes are redone from their stored frames (about a minute each).` : ""))) return;
     setError(null);
     const done: string[] = [];
@@ -569,6 +569,8 @@ export default function App() {
   const toggle = (id: string, on: boolean) =>
     setSelected((s) => (on ? [...s.filter((x) => x !== id), id].slice(-MAX_PANELS) : s.filter((x) => x !== id)));
   const selectedRuns = selected.map((id) => runs.find((r) => r.id === id)).filter((r): r is api.RunMeta => !!r);
+  // Only runs made by an older version change when recomputed; the rest would come back identical.
+  const outdatedRuns = selectedRuns.filter((r) => r.outdated);
   const anyConfidence = selectedRuns.some((r) => r.has_confidence);
 
   return (
@@ -641,9 +643,9 @@ export default function App() {
 
         <header className="history-head">
           <h2>History</h2>
-          {selectedRuns.length > 0 && !running ? (
-            <button className="quiet" onClick={recompute} title="Redo the ticked runs with the current version of BlockShot">
-              Recompute {selectedRuns.length > 1 ? `${selectedRuns.length} runs` : "run"}
+          {outdatedRuns.length > 0 && !running ? (
+            <button className="quiet" onClick={recompute} title="Redo the ticked runs that an older version of BlockShot made">
+              Recompute {outdatedRuns.length > 1 ? `${outdatedRuns.length} older runs` : "older run"}
             </button>
           ) : (
             <small>Tick up to {MAX_PANELS} to compare</small>
@@ -662,7 +664,11 @@ export default function App() {
                 <img src={api.inputUrl(r.id)} alt="" loading="lazy" decoding="async" />
                 <span>
                   <span className="name" title={runName(r)}>{shortName(runName(r))}</span>
-                  <small title={`${runDetail(r)} · ${r.created.replace("T", " ")}`}>{runDetail(r)} · {when(r.created)}</small>
+                  <small title={`${r.outdated ? "Made by an older version: tick it and press Recompute to redo it. " : ""}${runDetail(r)} · ${r.created.replace("T", " ")}`}>
+                    {r.outdated ? <span className="outdated">older version · </span> : null}
+                    {runDetail(r)}
+                    {!r.outdated && ` · ${when(r.created)}`/* outdated rows show the tag instead; the date is in the tooltip */}
+                  </small>
                 </span>
               </button>
               <button className="icon delete" aria-label={`Delete ${r.source ?? r.id}`} title="Delete" onClick={() => remove(r)}>

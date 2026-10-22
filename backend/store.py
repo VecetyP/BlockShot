@@ -133,7 +133,25 @@ def list_runs() -> list[dict]:
     if not RUNS.exists():
         return []
     metas = [json.loads(p.read_text()) for p in RUNS.glob("*/meta.json") if "." not in p.parent.name]  # not a run being recomputed
+    for m in metas:
+        m["outdated"] = is_outdated(m)
     return sorted(metas, key=lambda m: m["created"], reverse=True)
+
+
+def is_outdated(meta: dict) -> bool:
+    """Would recompute() change this run? Runs are cached under an id built from what made them, so
+    a run is outdated when the current version would give it a different id: a video scene made by
+    an older pipeline (or older models), or an image run made by an older model version. Everything
+    else about a run (levelling, builds, analysis) is worked out fresh whenever it's viewed."""
+    rid = meta["id"]
+    try:
+        if meta.get("kind") == "scene":
+            s = video.Settings(**{**meta.get("settings", {}), "geometry": video.Settings.geometry})
+            return _scene_id(meta["image_sha256"], s) != rid
+        model = model_of(rid)
+        return run_id(meta["image_sha256"], model, registry.cls(model).version) != rid
+    except (KeyError, TypeError):  # a model no longer offered, or settings from an incompatible version
+        return False
 
 
 MAX_POINTS = 500_000

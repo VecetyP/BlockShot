@@ -15,6 +15,7 @@ export type RunMeta = {
   kind?: "scene"; // a video scene: points fused from many frames, in frame 0's camera coordinates
   up?: number[]; // the direction treated as up, in the cloud's (OpenCV) axes (GET /runs/{id} only)
   above?: boolean; // an image seen from (nearly) straight above, like a top-down map
+  outdated?: boolean; // made by an older version: Recompute would change it (GET /runs only)
   frames?: number;
   cameras?: { c2w: number[][]; K: number[][] }[]; // per frame, OpenCV axes
   [k: string]: unknown;

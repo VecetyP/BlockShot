@@ -132,6 +132,7 @@ kbd {
 .history span { display: grid; min-width: 0; }
 .history .name, .history small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history li.active .name { color: var(--accent); }
+.history .outdated { display: inline; color: var(--warn); }
 /* Delete: only shown on hover (or keyboard focus), so the list stays calm. */
 .history button.delete {
   position: absolute; right: 6px; top: 50%; translate: 0 -50%; flex: none; padding: 6px; color: var(--muted);

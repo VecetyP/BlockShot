@@ -36,3 +36,13 @@ def test_a_failed_recompute_puts_the_old_run_back(tmp_path, monkeypatch):
         store.recompute("abc_moge_1")
     assert (runs / "abc_moge_1" / "input.png").read_bytes() == b"png"
     assert [m["id"] for m in store.list_runs()] == ["abc_moge_1"]
+
+
+def test_only_runs_made_by_an_older_version_are_outdated():
+    from backend.models import registry
+
+    model = "depth_anything"
+    current = store.run_id("ab" * 32, model, registry.cls(model).version)
+    older = store.run_id("ab" * 32, model, "an older version")
+    assert not store.is_outdated({"id": current, "image_sha256": "ab" * 32})
+    assert store.is_outdated({"id": older, "image_sha256": "ab" * 32})

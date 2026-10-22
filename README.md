@@ -85,8 +85,11 @@ and a strip of the sampled frames. Click a frame to view the scene, and its buil
 camera. The Minecraft build is seen from the chosen frame, with floors levelled from the average
 camera "up". Stand there in game the same way as for an image.
 
-Scenes made by an older version can be redone: tick them in History and press **Recompute**. The
-video isn't kept, so they are redone from their stored frames; image runs rerun their model.
+A scene keeps the result of every step above, so improvements to them only reach scenes made
+afterwards. History tags older ones **older version**; tick them and press **Recompute** to redo
+them. The video isn't kept, so they are redone from their stored frames. Image runs only store the
+model's output, so they are tagged only when that model changes; levelling, builds and analysis are
+worked out fresh whenever a run is viewed.
 
 How it works (`backend/video.py`):
 
