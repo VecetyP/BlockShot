@@ -13,6 +13,8 @@ export type RunMeta = {
   has_confidence: boolean;
   created: string;
   kind?: "scene"; // a video scene: points fused from many frames, in frame 0's camera coordinates
+  up?: number[]; // the direction treated as up, in the cloud's (OpenCV) axes (GET /runs/{id} only)
+  above?: boolean; // an image seen from (nearly) straight above, like a top-down map
   frames?: number;
   cameras?: { c2w: number[][]; K: number[][] }[]; // per frame, OpenCV axes
   [k: string]: unknown;
@@ -87,11 +89,12 @@ export async function waitJob<T>(jobId: string, onProgress?: OnProgress, signal?
   }
 }
 
-export const predict = (file: File, models: string[], onProgress?: OnProgress, force = false) => {
+export const predict = (file: File, models: string[], onProgress?: OnProgress, force = false, above = false) => {
   const fd = new FormData();
   fd.append("image", file);
   models.forEach((m) => fd.append("models", m));
   fd.append("force", String(force));
+  fd.append("above", String(above));
   return startJob(`${API}/predict`, { body: fd }).then((id) =>
     waitJob<{ id: string; cached: boolean; meta: RunMeta }[]>(id, onProgress),
   );
@@ -153,7 +156,7 @@ export const renderOffAxis = (id: string, onProgress?: OnProgress) =>
 
 /** How blocks are sized. auto: about `value` thousand blocks; meters: one block = value m; fit: longest side. */
 export type BuildMode = "auto" | "meters" | "fit";
-export type BuildSettings = { mode: BuildMode; value: number; above?: boolean }; // above: a top-down picture (images only)
+export type BuildSettings = { mode: BuildMode; value: number };
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks
   blocks: number;
@@ -172,7 +175,7 @@ export type MinecraftInfo = {
   top_blocks: [string, number][];
 };
 // `frame`: for scenes, the frame whose camera is the standing spot.
-const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}&above=${!!b.above}`;
+const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}`;
 /** axes: row-major 3x3, columns = Minecraft east, up, south in cloud coordinates; origin: the eye. */
 export type BlockPreview = { n: number; size: number; lo: Float32Array; axes: Float32Array; origin: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 

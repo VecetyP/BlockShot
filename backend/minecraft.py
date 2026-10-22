@@ -370,21 +370,25 @@ def view_from(b: Build, pose: Pose, fov_deg: float) -> Build:
                    pitch_deg=pitch, yaw_deg=yaw)
 
 
-def build_from_image(points, rgb, mask, K, mode="auto", value=300, budget=DEFAULT_BUDGET, progress=_quiet,
-                     above: bool = False) -> Build:
-    """A single-image run: points (H, W, 3) in its camera frame, viewer at that camera.
+def image_up(points: np.ndarray, mask: np.ndarray, above: bool = False) -> np.ndarray:
+    """"Up" for a single picture, in its camera frame, from its structure (find_up): the axis of its
+    floors, roofs and walls nearest the camera's own up, up to 60 degrees away, so a tilted or
+    downward-looking shot still comes out level. `above`: the picture looks (nearly) straight down
+    on the ground, like a top-down map; take the axis nearest the camera's backward direction
+    instead (straight down, the ground's axis and a wall's are otherwise a toss-up)."""
+    m = mask & (points[..., 2] > 0)
+    prior = np.array([0.0, 0.0, -1.0]) if above else np.array([0.0, -1.0, 0.0])
+    return find_up(grid_normals(points.astype(np.float64), m, step=2), prior, max_angle=60.0)[0]
 
-    "Up" comes from the picture's structure (find_up): the axis of its floors, roofs and walls
-    nearest the camera's own up, up to 60 degrees away, so a tilted or downward-looking shot still
-    builds level. `above`: the picture looks down on the ground (a top-down map), so take the axis
-    nearest the camera's backward direction instead (looking straight down, the ground's axis and a
-    wall's are otherwise a toss-up); the image's top is then "ahead"."""
+
+def build_from_image(points, rgb, mask, K, mode="auto", value=300, budget=DEFAULT_BUDGET, progress=_quiet,
+                     up: np.ndarray | None = None) -> Build:
+    """A single-image run: points (H, W, 3) in its camera frame, viewer at that camera, `up` from
+    image_up (computed here if not given)."""
     m = mask & (points[..., 2] > 0)
     fov = math.degrees(2 * math.atan(mask.shape[0] / 2 / float(K[1, 1])))
     P = points.astype(np.float64)
-    prior = np.array([0.0, 0.0, -1.0]) if above else np.array([0.0, -1.0, 0.0])
-    up, _ = find_up(grid_normals(P, m, step=2), prior, max_angle=60.0)
-    pose = Pose(np.zeros(3), np.array([0.0, 0.0, 1.0]), up)
+    pose = Pose(np.zeros(3), np.array([0.0, 0.0, 1.0]), image_up(points, mask) if up is None else np.asarray(up, float))
     return build_from_grids([(P, rgb, m, np.zeros(3))], pose, fov, mode, value, budget, progress)
 
 

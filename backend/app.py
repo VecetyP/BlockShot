@@ -58,8 +58,9 @@ def cancel_job(job_id: str):
 
 
 @app.post("/predict")
-def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False)):
-    """Starts a job; its result is [{id, cached, meta}] per model."""
+def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False), above: bool = Form(False)):
+    """Starts a job; its result is [{id, cached, meta}] per model. `above`: the picture looks (nearly)
+    straight down, a top-down map; also applied to runs that were already cached."""
     unknown = [m for m in models if m not in registry.MODELS]
     if unknown:
         raise HTTPException(400, f"unknown models: {unknown}")
@@ -72,7 +73,8 @@ def predict(image: UploadFile = File(...), models: list[str] = Form(...), force:
                 data, m, force=force, source=source,
                 progress=lambda stage, *_: progress(stage, i, len(models)),
             )
-            out.append({"id": rid, "cached": cached, "meta": meta})
+            store.set_above(rid, above)
+            out.append({"id": rid, "cached": cached, "meta": store.load_meta(rid)})
         return out
 
     return _job("predict", work)
@@ -115,8 +117,9 @@ def runs():
 
 @app.get("/runs/{rid}")
 def run(rid: str):
+    """Run metadata, plus "up": the direction the 3D view and the builds treat as up."""
     _run_or_404(rid)
-    return store.load_meta(rid)
+    return {**store.load_meta(rid), "up": store.run_up(rid)}
 
 
 @app.delete("/runs/{rid}")
@@ -205,41 +208,41 @@ def _check_minecraft(rid: str, mode: str, value: float) -> None:
 
 
 @app.post("/runs/{rid}/minecraft/build")
-def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
+def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Starts a job that builds the blocks; its result is the build summary."""
     _check_minecraft(rid, mode, value)
-    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame, above))
+    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame))
 
 
 @app.get("/runs/{rid}/minecraft.json")
-def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
+def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Build summary: dimensions, block count, block size, FOV, pitch, paste offset, tiles."""
     _check_minecraft(rid, mode, value)
-    return store.minecraft_info(rid, mode, value, frame=frame, above=above)
+    return store.minecraft_info(rid, mode, value, frame=frame)
 
 
 @app.get("/runs/{rid}/minecraft.bin")
-def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
+def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     _check_minecraft(rid, mode, value)
-    return Response(store.minecraft_preview_bin(rid, mode, value, frame, above), media_type="application/octet-stream")
+    return Response(store.minecraft_preview_bin(rid, mode, value, frame), media_type="application/octet-stream")
 
 
 @app.get("/runs/{rid}/minecraft.schem")
-def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
+def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """One Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
     _check_minecraft(rid, mode, value)
     try:
-        data, filename = store.minecraft_schem(rid, mode, value, frame, above)
+        data, filename = store.minecraft_schem(rid, mode, value, frame)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/runs/{rid}/minecraft/tiles")
-def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, above: bool = False):
+def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Starts a job writing the build as a zip of tiles; its result is the download URL."""
     _check_minecraft(rid, mode, value)
-    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame, above)}")
+    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame)}")
 
 
 @app.get("/runs/{rid}/exports/{name}")

@@ -84,7 +84,7 @@ function Panel(props: {
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
   const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
-  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.build?.above}:${props.frame}`;
+  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.frame}`;
   useEffect(() => {
     if (!props.build || !buildable || blocks?.key === blocksKey) return;
     const abort = new AbortController();
@@ -231,7 +231,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
       .catch((e) => live() && setError(String(e)))
       .finally(() => live() && setBuilding(null));
     return () => abort.abort();
-  }, [run.id, settings.mode, settings.value, settings.above, frame]);
+  }, [run.id, run.above, settings.mode, settings.value, frame]);
   const exportZip = () => {
     setExporting(startingJob("tiles"));
     api.exportTiles(run.id, settings, frame, setExporting)
@@ -302,7 +302,7 @@ function BuildControls({ value, onChange }: { value: api.BuildSettings; onChange
           value={value.mode}
           onChange={(e) => {
             const mode = e.target.value as api.BuildMode;
-            onChange({ ...value, mode, value: { auto: 300, meters: 0.25, fit: 128 }[mode] });
+            onChange({ mode, value: { auto: 300, meters: 0.25, fit: 128 }[mode] });
           }}
         >
           <option value="auto">Auto (by block count)</option>
@@ -313,10 +313,6 @@ function BuildControls({ value, onChange }: { value: api.BuildSettings; onChange
       {draft.mode === "auto" && slider("About", 0, AUTO_STEPS.length - 1, 1, `${AUTO_STEPS[idx] >= 1000 ? `${AUTO_STEPS[idx] / 1000}M` : `${AUTO_STEPS[idx]}k`} blocks`, idx, (i) => setDraft({ ...draft, value: AUTO_STEPS[i] }))}
       {draft.mode === "meters" && slider("1 block =", 0.05, 2, 0.05, `${draft.value.toFixed(2)} m`, draft.value, (v) => setDraft({ ...draft, value: v }))}
       {draft.mode === "fit" && slider("Longest side", 32, 1024, 32, `${draft.value} blocks`, draft.value, (v) => setDraft({ ...draft, value: v }))}
-      <label className="check" title="Only for pictures looking (nearly) straight down, like a top-down map: the ground becomes the floor of the build. Angled shots and video scenes are levelled automatically.">
-        <input type="checkbox" checked={!!value.above} onChange={(e) => onChange({ ...value, above: e.target.checked })} />
-        Seen from above
-      </label>
     </>
   );
 }
@@ -431,6 +427,7 @@ export default function App() {
   const [frames, setFrames] = useState<Record<string, number>>({}); // scene id -> frame viewed from
   const frameOf = (id: string) => frames[id] ?? 0;
   const setFrame = (id: string) => (i: number) => setFrames((f) => ({ ...f, [id]: i }));
+  const [above, setAbove] = useState(false); // the next picture is a top-down map
   const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
@@ -467,7 +464,7 @@ export default function App() {
         setSelected([scene.id]);
         return;
       }
-      const out = await api.predict(file, picked, setRunning);
+      const out = await api.predict(file, picked, setRunning, false, above);
       await refreshRuns();
       setSelected(out.slice(0, MAX_PANELS).map((r) => r.id));
     } catch (e) {
@@ -566,6 +563,12 @@ export default function App() {
           ))}
         </fieldset>
         )}
+        {!isVideo && (
+          <label className="check" title="Tick for pictures that look (nearly) straight down, like a top-down map, so the ground becomes the floor. Angled and tilted shots are levelled automatically without it. Applies to the picture's runs, already made ones included.">
+            <input type="checkbox" checked={above} onChange={(e) => setAbove(e.target.checked)} />
+            Top-down map (seen from straight above)
+          </label>
+        )}
         {running ? (
           <ProgressBar job={running} />
         ) : (
@@ -652,7 +655,7 @@ export default function App() {
           {selected.length ? (
             selected.map((id) => (
               <Panel
-                key={id}
+                key={`${id}:${runs.find((r) => r.id === id)?.above ?? false}`} // reload when its "up" changes
                 id={id}
                 build={showBlocks ? build : undefined}
                 mode={mode}

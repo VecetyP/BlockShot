@@ -19,6 +19,13 @@ type Props = {
   frame?: number; // scenes: the frame whose camera Snap goes to
 };
 
+/** Turns the cloud so the run's "up" (OpenCV axes) points up on screen: images shot at an angle
+ * come out level. Identity for scenes, which are levelled already. */
+function levelOf(meta: RunMeta) {
+  const [x, y, z] = meta.up ?? [0, -1, 0];
+  return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(x, -y, -z).normalize(), new THREE.Vector3(0, 1, 0));
+}
+
 /** The camera Snap goes to: a scene frame's camera, or the input camera (identity) for images. */
 const cameraOf = (meta: RunMeta, frame = 0) => meta.cameras?.[frame] ?? { c2w: null, K: meta.intrinsics };
 
@@ -300,13 +307,16 @@ function WasdControls({ speed, scale, scroll }: { speed: number; scale: number; 
 function Snap({ target, snapKey, meta, frame }: { target: number; snapKey: number; meta: RunMeta; frame?: number }) {
   const { camera, controls } = useThree() as unknown as { camera: THREE.Camera; controls: Controls | null };
   const c2w = cameraOf(meta, frame).c2w;
+  const level = useMemo(() => levelOf(meta), [meta]);
   useEffect(() => {
     if (!controls) return;
     camera.up.set(0, 1, 0);
     if (!c2w) {
+      // The input camera, turned with the levelled cloud (see levelOf): looking down if it did.
       camera.position.set(0, 0, 0);
-      controls.target.set(0, 0, -target * LOOK);
-      controls.update(); // looks from the origin straight down -Z (= +Z in OpenCV): identity rotation
+      controls.target.set(0, 0, -target * LOOK).applyQuaternion(level);
+      controls.update(); // aims at the target but drops the camera's roll...
+      camera.quaternion.copy(level); // ...so restore the exact orientation
     } else {
       // OpenCV camera-to-world -> three.js: F R F with F = diag(1, -1, -1) on both sides.
       const r = (i: number, j: number) => (i === 0 ? 1 : -1) * (j === 0 ? 1 : -1) * c2w[i][j];
@@ -317,19 +327,22 @@ function Snap({ target, snapKey, meta, frame }: { target: number; snapKey: numbe
       camera.quaternion.setFromRotationMatrix(R); // ...so restore the exact orientation
     }
     controls.dispatchEvent({ type: "change" }); // update() alone doesn't fire when nothing moved
-  }, [camera, controls, target, snapKey, c2w]);
+  }, [camera, controls, target, snapKey, c2w, level]);
   return null;
 }
 
 export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav, blocks, frame }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
+  const level = useMemo(() => levelOf(meta), [meta]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
     <Canvas className="viewer" linear flat gl={{ antialias: false, preserveDrawingBuffer: true }} dpr={1}>
       <color attach="background" args={["#111317"]} />
       <IntrinsicsProjection meta={meta} frame={frame} near={z.min * 0.01} far={z.max * 100} />
-      {blocks ? <Blocks blocks={blocks} /> : <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />}
-      {tears && tears.length > 0 && <TearMarkers tears={tears} />}
+      <group quaternion={level}>
+        {blocks ? <Blocks blocks={blocks} /> : <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />}
+        {tears && tears.length > 0 && <TearMarkers tears={tears} />}
+      </group>
       <OrbitControls makeDefault enableDamping={false} enableZoom={false} enablePan={false} rotateSpeed={nav.rotate} />
       <WasdControls speed={nav.move} scale={z.median} scroll={nav.zoom} />
       {sync && <SyncControls sync={sync} scale={z.median} />}

@@ -217,7 +217,7 @@ def test_seen_from_above_builds_a_top_down_picture_flat():
     pts = unproject(depth.astype(np.float32), K)
     rgb = np.full((h, w, 3), 100, np.uint8)
     mask = np.ones((h, w), bool)
-    b = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5, above=True)
+    b = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5, up=mc.image_up(pts, mask, above=True))
     assert b.dims[1] <= 12  # 3 m of buildings at 0.5 m blocks: a flat map, not a 40 m wall
     assert b.pitch_deg > 80  # looking down at it
     side = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5)
