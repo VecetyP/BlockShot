@@ -36,3 +36,20 @@ def test_errors_are_reported_not_lost():
 
     job = _wait(jobs.submit("test", work))
     assert job.state == "error" and "boom" in job.error and job.finished is not None
+
+
+def test_a_cancelled_build_leaves_the_queue_without_building():
+    from backend import store
+
+    built = []
+    store._build_lock.acquire()  # another build is running
+    try:
+        job = jobs.submit("test", lambda progress: built.append(store.minecraft_build("no-such-run", "auto", 300, progress)))
+        t0 = time.time()
+        while job.stage != "waiting for another build" and time.time() - t0 < 5:
+            time.sleep(0.01)
+        jobs.cancel(job.id)
+        _wait(job)
+    finally:
+        store._build_lock.release()
+    assert job.state == "error" and job.error == "cancelled" and not built

@@ -300,9 +300,12 @@ def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int
     key = (rid, mode, float(value), frame)
     if key in _builds:
         return _builds[key]
-    with _build_lock:
+    say = progress or (lambda *a, **k: None)
+    # Poll for the lock so a queued build the browser gave up on (progress raises) leaves the queue.
+    while not _build_lock.acquire(timeout=0.25):
+        say("waiting for another build")
+    try:
         if key not in _builds:
-            say = progress or (lambda *a, **k: None)
             say("reading points")
             if is_scene(rid):
                 b = _scene_build(rid, mode, value, frame, say)
@@ -312,7 +315,9 @@ def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int
             while len(_builds) >= MAX_CACHED_BUILDS:
                 _builds.pop(next(iter(_builds)))
             _builds[key] = b
-    return _builds[key]
+        return _builds[key]
+    finally:
+        _build_lock.release()
 
 
 def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> dict:

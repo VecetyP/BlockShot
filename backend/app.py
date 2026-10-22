@@ -51,6 +51,12 @@ def job(job_id: str):
     return jobs.as_dict(j)
 
 
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    jobs.cancel(job_id)
+    return {}
+
+
 @app.post("/predict")
 def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False)):
     """Starts a job; its result is [{id, cached, meta}] per model."""

@@ -55,14 +55,31 @@ export type OnProgress = (job: JobState) => void;
 const startJob = (url: string, init?: RequestInit) =>
   fetch(url, { method: "POST", ...init }).then(json<{ job_id: string }>).then((j) => j.job_id);
 
-/** Polls a job until it finishes; resolves with its result or rejects with its error. */
-export async function waitJob<T>(jobId: string, onProgress?: OnProgress): Promise<T> {
-  for (;;) {
-    const job = await fetch(`${API}/jobs/${jobId}`).then(json<JobState>);
-    onProgress?.(job);
-    if (job.state === "done") return job.result as T;
-    if (job.state === "error") throw new Error(job.error ?? "job failed");
-    await new Promise((r) => setTimeout(r, 400));
+/** Polls a job until it finishes; resolves with its result or rejects with its error. Aborting
+ * `signal` stops polling and cancels the job on the server (e.g. a build nobody waits for). */
+export async function waitJob<T>(jobId: string, onProgress?: OnProgress, signal?: AbortSignal): Promise<T> {
+  const cancel = () => void fetch(`${API}/jobs/${jobId}/cancel`, { method: "POST" }).catch(() => {});
+  signal?.addEventListener("abort", cancel);
+  let failures = 0;
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      let job: JobState;
+      try {
+        job = await fetch(`${API}/jobs/${jobId}`, { signal }).then(json<JobState>);
+        failures = 0;
+      } catch (e) {
+        if (signal?.aborted || ++failures > 5) throw e; // ride out a hiccup in the dev proxy
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      onProgress?.(job);
+      if (job.state === "done") return job.result as T;
+      if (job.state === "error") throw new Error(job.error ?? "job failed");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } finally {
+    signal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -155,16 +172,17 @@ const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&fram
 export type BlockPreview = { n: number; size: number; lo: Float32Array; axes: Float32Array; origin: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 
 /** Builds the blocks in a background job (cached on the server); resolves with the summary. */
-export const buildMinecraft = (id: string, b: BuildSettings, frame: number, onProgress?: OnProgress) =>
-  startJob(`${API}/runs/${id}/minecraft/build?${q(b, frame)}`).then((job) => waitJob<MinecraftInfo>(job, onProgress));
+export const buildMinecraft = (id: string, b: BuildSettings, frame: number, onProgress?: OnProgress, signal?: AbortSignal) =>
+  startJob(`${API}/runs/${id}/minecraft/build?${q(b, frame)}`, { signal }).then((job) => waitJob<MinecraftInfo>(job, onProgress, signal));
 
 /** Writes the build as a zip of tiles; resolves with its download URL. */
 export const exportTiles = (id: string, b: BuildSettings, frame: number, onProgress?: OnProgress) =>
   startJob(`${API}/runs/${id}/minecraft/tiles?${q(b, frame)}`).then((job) => waitJob<string>(job, onProgress)).then((u) => API + u);
 
 // Layout documented in backend/store.py:minecraft_preview_bin.
-export async function getBlocks(id: string, b: BuildSettings, frame: number): Promise<BlockPreview> {
-  const r = await fetch(`${API}/runs/${id}/minecraft.bin?${q(b, frame)}`);
+export async function getBlocks(id: string, b: BuildSettings, frame: number, signal?: AbortSignal): Promise<BlockPreview> {
+  await buildMinecraft(id, b, frame, undefined, signal); // build as a cancellable job; the preview then comes from the cache
+  const r = await fetch(`${API}/runs/${id}/minecraft.bin?${q(b, frame)}`, { signal });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const buf = await r.arrayBuffer();
   const n = new Uint32Array(buf, 0, 1)[0];

@@ -87,9 +87,11 @@ function Panel(props: {
   const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.frame}`;
   useEffect(() => {
     if (!props.build || !buildable || blocks?.key === blocksKey) return;
-    api.getBlocks(props.id, props.build, props.frame)
+    const abort = new AbortController();
+    api.getBlocks(props.id, props.build, props.frame, abort.signal)
       .then((data) => setBlocks({ key: blocksKey, data }))
-      .catch(() => setBlocks({ key: blocksKey, data: null }));
+      .catch(() => !abort.signal.aborted && setBlocks({ key: blocksKey, data: null }));
+    return () => abort.abort();
   }, [props.build, buildable, blocksKey, blocks?.key, props.id, props.frame]);
   const shownBlocks = props.build && blocks?.key === blocksKey ? blocks.data : null;
 
@@ -218,16 +220,17 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
   const [exporting, setExporting] = useState<api.JobState | null>(null);
   const [zipUrl, setZipUrl] = useState<string | null>(null);
   useEffect(() => {
-    let live = true;
+    const abort = new AbortController();
+    const live = () => !abort.signal.aborted;
     setInfo(null);
     setError(null);
     setZipUrl(null);
     setBuilding(startingJob("minecraft"));
-    api.buildMinecraft(run.id, settings, frame, (j) => live && setBuilding(j))
-      .then((i) => live && setInfo(i))
-      .catch((e) => live && setError(String(e)))
-      .finally(() => live && setBuilding(null));
-    return () => { live = false; };
+    api.buildMinecraft(run.id, settings, frame, (j) => live() && setBuilding(j), abort.signal)
+      .then((i) => live() && setInfo(i))
+      .catch((e) => live() && setError(String(e)))
+      .finally(() => live() && setBuilding(null));
+    return () => abort.abort();
   }, [run.id, settings.mode, settings.value, frame]);
   const exportZip = () => {
     setExporting(startingJob("tiles"));

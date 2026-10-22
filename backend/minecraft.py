@@ -25,6 +25,7 @@ OUTLIER_PCT = 0.5  # % of points ignored at each end of each axis (stray points)
 MODES = {"auto": (20, 8000), "meters": (0.01, 10.0), "fit": (16, 4096)}
 DEFAULT_BUDGET = 4_000_000  # blocks; past this the block size grows until the build fits
 TEAR = 0.05  # neighbouring pixels further apart than 5% of their distance are separate surfaces
+SIZING_SAMPLES = 4_000_000  # per sizing pass, so "auto" doesn't fill the surface several times over
 MAX_SAMPLES = 30_000_000  # cap on points after filling surfaces between pixels
 CLEAR_BLOCKS = 4  # keep this many blocks around the viewer's eyes empty (own character, railings)
 MAX_SINGLE_CELLS = 64_000_000  # larger builds only export as tiles (WorldEdit loads dense volumes)
@@ -176,7 +177,9 @@ def _voxelize(p, lin, lo, s, dims):
     return ijk, mean
 
 
-def _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, limited=False) -> Build:
+def _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, limited=False, target=None) -> Build:
+    """`target`: "auto" builds aim at this many blocks; if the sizing passes undershot the size,
+    blocks are enlarged here (the samples are dense enough for bigger blocks, not smaller)."""
     # Inside the bounds, and not in the space around the viewer's eyes: anything that close (a
     # third-person character, a railing) would become giant blocks covering the view.
     keep = ((p >= lo) & (p <= hi)).all(1) & (np.linalg.norm(p, axis=1) > CLEAR_BLOCKS * s)
@@ -185,6 +188,9 @@ def _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, limited=False) -
         progress("placing blocks")
         dims = _dims(lo, hi, s)
         ijk, mean = _voxelize(p, lin, lo, s, dims)
+        if target and budget >= len(ijk) > 1.15 * target:
+            s *= math.sqrt(len(ijk) / target)
+            continue
         if len(ijk) <= budget:
             break
         s *= math.sqrt(len(ijk) / budget) * 1.05  # surfaces: block count ~ 1/size²
@@ -244,18 +250,22 @@ def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", valu
              for P, rgb, mask, c in grids]
     lo, hi = _bounds(np.concatenate([P[m] for P, _, m, _ in grids]))
 
-    def samples(s):
-        cap = MAX_SAMPLES // len(grids)  # the cap is shared by all frames
-        out = [surface_samples(P, rgb, m, c, s, cap) for P, rgb, m, c in grids]
+    def samples(s, total=MAX_SAMPLES, stage=None):
+        cap = total // len(grids)  # the cap is shared by all frames
+        out = []
+        for i, (P, rgb, m, c) in enumerate(grids):
+            if stage and len(grids) > 1:
+                progress(stage, i, len(grids), f"frame {i + 1}/{len(grids)}")  # also lets a cancelled job stop here
+            out.append(surface_samples(P, rgb, m, c, s, cap))
         return np.concatenate([o[0] for o in out]), np.concatenate([o[1] for o in out])
 
-    if mode == "auto":
-        s = _size_for_count(lambda s: samples(s)[0], lo, hi, value * 1000, progress)
+    if mode == "auto":  # sizing only counts occupied cells, so a sparser fill is close enough
+        s = _size_for_count(lambda s: samples(s, SIZING_SAMPLES, "sizing blocks")[0], lo, hi, value * 1000, progress)
     else:
         s = float(value) if mode == "meters" else float((hi - lo).max()) / value
     progress("filling surfaces")
-    p, rgb = samples(s)
-    return _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress)
+    p, rgb = samples(s, stage="filling surfaces")
+    return _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, target=value * 1000 if mode == "auto" else None)
 
 
 def build_from_image(points, rgb, mask, K, mode="auto", value=300, budget=DEFAULT_BUDGET, progress=_quiet) -> Build:

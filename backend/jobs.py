@@ -30,6 +30,11 @@ class Job:
     error: str | None = None
     started: float = field(default_factory=time.time)
     finished: float | None = None
+    cancelled: bool = False
+
+
+class Cancelled(Exception):
+    """Raised from progress() once the browser has given up on the job."""
 
 
 Progress = Callable[..., None]
@@ -44,12 +49,16 @@ def submit(kind: str, fn: Callable[[Progress], Any]) -> Job:
         _jobs[job.id] = job
 
     def progress(stage: str, done: float = 0, total: float = 0, message: str = "") -> None:
+        if job.cancelled:
+            raise Cancelled
         job.stage, job.done, job.total, job.message = stage, done, total, message
 
     def run() -> None:
         try:
             job.result = fn(progress)
             job.state, job.stage, job.done = "done", "done", job.total
+        except Cancelled:
+            job.state, job.error = "error", "cancelled"
         except Exception as e:  # report to the browser instead of dying silently in a thread
             log.error("job %s (%s) failed:\n%s", job.id, kind, traceback.format_exc())
             job.state, job.error = "error", f"{type(e).__name__}: {e}"
@@ -63,6 +72,12 @@ def submit(kind: str, fn: Callable[[Progress], Any]) -> Job:
 def get(job_id: str) -> Job | None:
     with _lock:
         return _jobs.get(job_id)
+
+
+def cancel(job_id: str) -> None:
+    """Stops the job at its next progress report (work between reports still finishes)."""
+    if job := get(job_id):
+        job.cancelled = True
 
 
 def as_dict(job: Job) -> dict:
