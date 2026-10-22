@@ -9,6 +9,20 @@ from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from .base import Prediction, unproject
 
 MODEL_RES = 518  # VGGT's training width; height is rounded to a multiple of the 14 px patch
+PATCH = 14
+
+
+def frames_size(h: int, w: int) -> tuple[int, int]:
+    """(height, width) frames go into VGGT at: the longer side is MODEL_RES, the other rounded to
+    the patch size. Portrait frames are not stretched to 518 wide (that is 3x the patches, and a
+    phone video then overflows 16 GB)."""
+    r = lambda x: max(PATCH, round(x / PATCH) * PATCH)
+    return (MODEL_RES, r(MODEL_RES * w / h)) if h > w else (r(MODEL_RES * h / w), MODEL_RES)
+
+
+def patches_per_frame(h: int, w: int) -> int:
+    mh, mw = frames_size(h, w)
+    return (mh // PATCH) * (mw // PATCH)
 
 
 class VGGT:
@@ -56,17 +70,17 @@ class VGGT:
         resolution: extrinsics (S, 3, 4) camera-from-world, intrinsics (S, 3, 3), depth (S, H, W)
         and depth_conf (S, H, W) (>= 1)."""
         h, w = frames[0].shape[:2]
-        mh = max(14, round(MODEL_RES * h / w / 14) * 14)
+        mh, mw = frames_size(h, w)
         x = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).float().div(255).to(self.device)
-        x = F.interpolate(x, size=(mh, MODEL_RES), mode="bilinear", align_corners=False, antialias=True)
+        x = F.interpolate(x, size=(mh, mw), mode="bilinear", align_corners=False, antialias=True)
         with torch.autocast(self.device, dtype=self.dtype, enabled=self.dtype != torch.float32):
             out = self.model(x)
-        E, K = pose_encoding_to_extri_intri(out["pose_enc"].float(), (mh, MODEL_RES))
+        E, K = pose_encoding_to_extri_intri(out["pose_enc"].float(), (mh, mw))
         size = dict(size=(h, w), mode="bilinear", align_corners=False)
         depth = F.interpolate(out["depth"][0, ..., 0].float()[:, None], **size)[:, 0]
         conf = F.interpolate(out["depth_conf"][0].float()[:, None], **size)[:, 0]
         K = K[0].cpu().numpy().astype(np.float64)
-        K[:, 0] *= w / MODEL_RES  # model-res pixels -> frame pixels
+        K[:, 0] *= w / mw  # model-res pixels -> frame pixels
         K[:, 1] *= h / mh
         return {
             "extrinsics": E[0].cpu().numpy().astype(np.float64),

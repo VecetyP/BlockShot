@@ -30,11 +30,12 @@ import numpy as np
 from scipy.ndimage import binary_dilation, binary_opening, grey_erosion, label, sobel
 
 from .models import registry
+from .models import vggt as vggt_model
 from .models.base import unproject
 
-PIPELINE = 4  # bump when reconstruction changes, so cached scenes are rebuilt (4: no blanket confidence cut)
-VGGT_ONE_PASS = 96  # frames VGGT handles in one pass (measured on 16 GB: 64 frames peak at 9.8 GB)
-CHUNK, OVERLAP = 64, 16  # longer clips: overlapping chunks, joined on the shared frames
+PIPELINE = 6  # bump when reconstruction changes, so cached scenes are rebuilt (6: portrait frames at 518 tall, sampled ghost judges)
+PASS_PATCHES = 40_000  # image patches VGGT gets in one pass: 51 phone frames (58 portrait frames, 45k patches, peaked at 11.8 GB)
+# Longer clips go in overlapping chunks of that size, a quarter shared, joined on the shared frames.
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
 LOW_CONF_PCT = 20  # per frame, VGGT's least confident 20% of pixels are ignored...
 FAR = 4  # ...if they're also this many times farther than the frame's median depth (sky, haze)
@@ -43,6 +44,7 @@ SHAPE_BLUR = 0.05  # MoGe geometry: VGGT's shape is followed at this scale (frac
 FREE_SPACE_TOL = 0.05  # a point this much (relative) in front of another frame's surface "floats"...
 FREE_SPACE_WINDOW = 7  # ...in front of every surface that frame saw within this many pixels...
 FREE_SPACE_VOTES = 2  # ...for at least this many frames, and more of them than frames that agree with it
+FREE_SPACE_FRAMES = 24  # each frame is checked against at most this many others, spread over the clip
 
 
 @dataclass
@@ -192,15 +194,17 @@ def vggt_poses(frames: list[np.ndarray], progress=_quiet) -> tuple[dict, int]:
     camera coordinates. Returns (result, number of VGGT passes)."""
     model = registry.get("vggt")
     n = len(frames)
-    if n <= VGGT_ONE_PASS:
+    chunk = max(8, PASS_PATCHES // vggt_model.patches_per_frame(*frames[0].shape[:2]))
+    overlap = max(4, chunk // 4)
+    if n <= chunk:
         progress("finding camera poses (VGGT)", 0, 1, f"{n} frames in one pass")
         out = model.predict_frames(frames)
         return merge_chunks([out], [0], n), 1
-    starts = list(range(0, n - OVERLAP, CHUNK - OVERLAP))
+    starts = list(range(0, n - overlap, chunk - overlap))
     chunks = []
     for k, a in enumerate(starts):
         progress("finding camera poses (VGGT)", k, len(starts), f"chunk {k + 1}/{len(starts)}")
-        chunks.append(model.predict_frames(frames[a:a + CHUNK]))
+        chunks.append(model.predict_frames(frames[a:a + chunk]))
         registry.free_cache()
     return merge_chunks(chunks, starts, n), len(starts)
 
@@ -216,12 +220,15 @@ def free_space_filter(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, c2w: n
     keep = mask.copy()
     w2c = np.linalg.inv(c2w)
     nearest = np.stack([grey_erosion(np.where(mask[j], depth[j], np.inf), size=FREE_SPACE_WINDOW) for j in range(n)])
+    # ponytail: a fixed sample of other frames keeps this linear in clip length (every pair took 255 s
+    # for 120 frames); smarter would be picking the frames that overlap most.
+    judges = np.unique(np.linspace(0, n - 1, min(n, FREE_SPACE_FRAMES + 1)).round().astype(int))
     for i in range(n):
         progress("removing ghosts", i, n)
         P = world_points(depth[i], K[i], c2w[i]).reshape(-1, 3)[mask[i].ravel()]
         votes = np.zeros(len(P), np.int16)
         seen = np.zeros(len(P), np.int16)
-        for j in range(n):
+        for j in judges:
             if j == i:
                 continue
             q = P @ w2c[j, :3, :3].T + w2c[j, :3, 3]

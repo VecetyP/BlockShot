@@ -87,8 +87,9 @@ camera "up". Stand there in game the same way as for an image.
 
 How it works (`backend/video.py`):
 
-1. VGGT reads all frames in one pass (up to 96; longer clips go in overlapping chunks of 64, joined
-   with a similarity fit on the shared frames). It gives every frame's camera pose and depth in one
+1. VGGT reads all frames in one pass, up to 40k image patches: 51 phone frames, landscape or
+   portrait, with each frame's longer side at 518 px (peak 11.3 GB of GPU memory). Longer clips go in overlapping chunks of that
+   size, joined with a similarity fit on the shared frames. It gives every frame's camera pose and depth in one
    frame of reference, so a frame that comes back to something already seen agrees with the first
    view of it.
 2. MoGe, on six frames, sets the scale in metres.
@@ -121,7 +122,10 @@ camera poses (20 frames at 640 × 360):
 | Surface error | 24–28 cm (median) |
 | VGGT, 64 frames in one pass | 26 s, 9.8 GB peak VRAM |
 
-**Limits.** Fast motion, motion blur and blank walls can throw the poses off. Keep the camera moving
+**Limits.** Fast motion, motion blur and blank walls can throw the poses off. Circling an object up
+close is the hardest case: on a 29 s clip walking around a chair at about 1 m (462° of turning),
+neighbouring frames agreed on only 55% of points (93% on a hallway walk), and ghost removal leaves
+holes where the views disagree. Keep the camera moving
 slowly, with each frame overlapping the last. MoGe's metres were 1.56× off on the synthetic room, so
 treat real-size builds from video as approximate. Ghost removal compares every frame with every
 other, so it grows with the square of the frame count: 7 s for 24 frames, roughly 40 s for 60.
