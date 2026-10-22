@@ -149,7 +149,7 @@ function ProgressBar({ job }: { job: api.JobState }) {
   return (
     <div className="progress" role="progressbar" aria-label={job.stage} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
       <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${pct ?? 100}%` }} data-indeterminate={pct === null || undefined} />
+        <div className="progress-fill" style={{ transform: `scaleX(${(pct ?? 100) / 100})` }} data-indeterminate={pct === null || undefined} />
       </div>
       <div className="progress-text">
         <span>{job.stage}{job.message ? ` · ${job.message}` : ""}</span>
