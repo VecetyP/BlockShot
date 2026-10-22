@@ -147,10 +147,9 @@ other, so it grows with the square of the frame count: 7 s for 24 frames, roughl
    takes the one nearest the camera's own up. A tilted photo, or a city shot 40 degrees from above,
    still builds level, and the card gives the pitch to look down at it. The 3D view is levelled the
    same way. For a map shot straight down, tick **Top-down map** next to Run (straight down, the
-   ground's axis and a wall's are a toss-up); it is kept with the picture's runs. Video scenes line
-   the grid up with the first frame, with "up"
-   averaged over all frames, and are built once: choosing another frame only changes where you
-   stand, your yaw and pitch, and the FOV.
+   ground's axis and a wall's are a toss-up); it is kept with the picture's runs. Video scenes are
+   levelled when they're made (see [From a video](#from-a-video)) and built once: choosing another
+   frame only changes where you stand, your yaw and pitch, and the FOV.
 3. **Blocks.** The surface between neighbouring pixels is filled in, except across depth jumps, and
    snapped to a grid whose spacing comes from the block-size setting. The outermost 0.5% of points on
    each axis are ignored, so stray points don't shrink the build, and blocks within 4 of the eye are
