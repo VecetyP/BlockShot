@@ -8,7 +8,7 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-from . import store  # noqa: E402
+from . import jobs, store  # noqa: E402
 from .models import registry  # noqa: E402
 
 app = FastAPI(title="BlockShot")
@@ -31,18 +31,38 @@ def unload(name: str | None = None):
     return registry.status()
 
 
+def _job(kind: str, fn) -> dict:
+    return {"job_id": jobs.submit(kind, fn).id}
+
+
+@app.get("/jobs/{job_id}")
+def job(job_id: str):
+    """Progress of a background job: state, stage, done/total, message; result once done."""
+    j = jobs.get(job_id)
+    if j is None:
+        raise HTTPException(404, f"no job {job_id}")
+    return jobs.as_dict(j)
+
+
 @app.post("/predict")
 def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False)):
-    # Plain def: FastAPI runs it in a worker thread, so History and images keep loading during inference.
+    """Starts a job; its result is [{id, cached, meta}] per model."""
     unknown = [m for m in models if m not in registry.MODELS]
     if unknown:
         raise HTTPException(400, f"unknown models: {unknown}")
-    data = image.file.read()
-    out = []
-    for m in models:  # sequential on purpose: one model's activations on the GPU at a time
-        rid, meta, cached = store.predict_cached(data, m, force=force, source=image.filename)
-        out.append({"id": rid, "cached": cached, "meta": meta})
-    return out
+    data, source = image.file.read(), image.filename
+
+    def work(progress):
+        out = []
+        for i, m in enumerate(models):  # sequential on purpose: one model's activations on the GPU at a time
+            rid, meta, cached = store.predict_cached(
+                data, m, force=force, source=source,
+                progress=lambda stage, *_: progress(stage, i, len(models)),
+            )
+            out.append({"id": rid, "cached": cached, "meta": meta})
+        return out
+
+    return _job("predict", work)
 
 
 @app.get("/runs")
@@ -145,10 +165,11 @@ def minecraft_schem(rid: str, size: int = 128):
 
 @app.post("/runs/{rid}/offaxis")
 def offaxis(rid: str):
+    """Starts a job; its result is the URLs of the renders."""
     _run_or_404(rid)
     if not store.has_depth(store.load_meta(rid)):
         raise HTTPException(400, "run has no depth to re-render")
-    return [f"/runs/{rid}/offaxis/{n}" for n in store.offaxis_renders(rid)]
+    return _job("offaxis", lambda progress: [f"/runs/{rid}/offaxis/{n}" for n in store.offaxis_renders(rid, progress)])
 
 
 @app.get("/runs/{rid}/offaxis/{name}")

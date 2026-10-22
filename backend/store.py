@@ -53,8 +53,9 @@ def run_id(image_sha: str, model: str, version: str) -> str:
     return f"{image_sha[:16]}_{model}_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
 
 
-def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None) -> tuple[str, dict, bool]:
-    """Returns (run_id, meta, cached)."""
+def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None, progress=None) -> tuple[str, dict, bool]:
+    """Returns (run_id, meta, cached). `progress(stage)` (optional) is told what's happening."""
+    say = progress or (lambda *a, **k: None)
     sha = hashlib.sha256(data).hexdigest()
     version = registry.cls(model).version
     rid = run_id(sha, model, version)
@@ -62,13 +63,19 @@ def predict_cached(data: bytes, model: str, force: bool = False, source: str | N
     if not force and (d / "meta.json").exists():
         return rid, load_meta(rid), True
     image = decode_image(data)
+    say(f"waiting for the GPU ({model})")
     with _gpu_lock:
         if not force and (d / "meta.json").exists():  # an identical request finished while we waited
             return rid, load_meta(rid), True
         try:
-            pred = registry.get(model).predict(image)
+            if not registry.is_loaded(model):
+                say(f"loading {model} weights (the first run downloads them)")
+            m = registry.get(model)
+            say(f"running {model}")
+            pred = m.predict(image)
         finally:
             registry.free_cache()
+        say(f"saving {model}")
         meta = save(d, rid, image, pred, model=model, version=version, image_sha256=sha, source=source)
     return rid, meta, False
 
@@ -252,8 +259,9 @@ def field_bin(rid: str, kind: str, stride: int | None = None) -> bytes | None:
     return x[sl][m].astype("<f4").tobytes()
 
 
-def offaxis_renders(rid: str) -> list[str]:
+def offaxis_renders(rid: str, progress=None) -> list[str]:
     """Renders at each yaw in offaxis.YAWS into runs/<id>/offaxis/, cached; returns file names."""
+    say = progress or (lambda *a, **k: None)
     d = RUNS / rid / "offaxis"
     names = [f"yaw_{y:+03d}.png" for y in offaxis.YAWS]
     if not all((d / n).exists() for n in names):
@@ -261,7 +269,8 @@ def offaxis_renders(rid: str) -> list[str]:
             d.mkdir(exist_ok=True)
             a = load_arrays(rid)
             rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
-            for y, n in zip(offaxis.YAWS, names):
+            for i, (y, n) in enumerate(zip(offaxis.YAWS, names)):
+                say("rendering off-axis views", i, len(names), f"{y:+d}°")
                 img = Image.fromarray(offaxis.render(a["points"], rgb, a["mask"], a["intrinsics"], y))
                 _atomic(d / n, lambda f: img.save(f, format="PNG"))
     return names

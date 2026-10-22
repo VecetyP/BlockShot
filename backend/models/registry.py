@@ -21,6 +21,10 @@ def cls(name: str):
     return getattr(importlib.import_module(f".{module}", __package__), cls_name)
 
 
+def is_loaded(name: str) -> bool:
+    return name in _loaded
+
+
 def get(name: str):
     if name not in _loaded:
         _loaded[name] = cls(name)(DEVICE)

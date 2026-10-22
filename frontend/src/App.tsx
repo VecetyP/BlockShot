@@ -130,6 +130,26 @@ function Panel(props: {
 
 type LightboxItem = { src: string; caption: string };
 
+/** Progress of a background job: stage, percent when measurable, elapsed time. */
+function ProgressBar({ job }: { job: api.JobState }) {
+  const pct = job.total > 0 ? Math.min(100, (100 * job.done) / job.total) : null;
+  return (
+    <div className="progress" role="progressbar" aria-label={job.stage} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${pct ?? 100}%` }} data-indeterminate={pct === null || undefined} />
+      </div>
+      <div className="progress-text">
+        <span>{job.stage}{job.message ? ` · ${job.message}` : ""}</span>
+        <span>{pct !== null && `${Math.round(pct)}% · `}{Math.round(job.elapsed)}s</span>
+      </div>
+    </div>
+  );
+}
+
+const startingJob = (kind: string): api.JobState => ({
+  id: "", kind, state: "running", stage: "starting", done: 0, total: 0, message: "", result: null, error: null, elapsed: 0,
+});
+
 const Icon = ({ d }: { d: string }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d={d} />
@@ -210,7 +230,7 @@ function MinecraftCard({ run, size }: { run: api.RunMeta; size: number }) {
 function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boolean; blockSize: number }) {
   const [tears, setTears] = useState<api.Tear[]>([]);
   const [offAxis, setOffAxis] = useState<string[] | null>(null);
-  const [rendering, setRendering] = useState(false);
+  const [rendering, setRendering] = useState<api.JobState | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   useEffect(() => {
     setOffAxis(null);
@@ -227,8 +247,8 @@ function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boo
     ...(run.has_normals || hasDepth ? ["curl", "residual"] : []),
   ];
   const renderOffAxis = () => {
-    setRendering(true);
-    api.renderOffAxis(run.id).then(setOffAxis).finally(() => setRendering(false));
+    setRendering(startingJob("offaxis"));
+    api.renderOffAxis(run.id, setRendering).then(setOffAxis).finally(() => setRendering(null));
   };
   const label = modelLabel(run);
   const items: LightboxItem[] = [
@@ -264,10 +284,10 @@ function Strip({ run, showTears, blockSize }: { run: api.RunMeta; showTears: boo
       {hasDepth && (
         offAxis ? (
           offAxis.map((u, i) => tile(1 + maps.length + i, `${u.match(/yaw_([+-]\d+)/)?.[1]}°`))
+        ) : rendering ? (
+          <div className="offaxis"><ProgressBar job={rendering} /></div>
         ) : (
-          <button className="offaxis" onClick={renderOffAxis} disabled={rendering}>
-            {rendering ? "Rendering…" : "Off-axis renders"}
-          </button>
+          <button className="offaxis" onClick={renderOffAxis}>Off-axis renders</button>
         )
       )}
       {hasDepth && <MinecraftCard run={run} size={blockSize} />}
@@ -281,7 +301,7 @@ export default function App() {
   const [picked, setPicked] = useState<string[]>([]);
   const [runs, setRuns] = useState<api.RunMeta[]>([]);
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState<api.JobState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -316,16 +336,16 @@ export default function App() {
 
   const run = async () => {
     if (!file || !picked.length) return;
-    setBusy(true);
+    setRunning(startingJob("predict"));
     setError(null);
     try {
-      const out = await api.predict(file, picked);
+      const out = await api.predict(file, picked, setRunning);
       await refreshRuns();
       setSelected(out.slice(0, MAX_PANELS).map((r) => r.id));
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setRunning(null);
     }
   };
 
@@ -366,9 +386,11 @@ export default function App() {
             </label>
           ))}
         </fieldset>
-        <button className="primary" disabled={!file || !picked.length || busy} onClick={run}>
-          {busy ? "Running…" : "Run"}
-        </button>
+        {running ? (
+          <ProgressBar job={running} />
+        ) : (
+          <button className="primary" disabled={!file || !picked.length} onClick={run}>Run</button>
+        )}
         {error && <p className="error">{error}</p>}
 
         <header className="history-head">

@@ -32,13 +32,42 @@ export const getModels = () => fetch(`${API}/models`).then(json<ModelInfo[]>);
 export const getRuns = () => fetch(`${API}/runs`).then(json<RunMeta[]>);
 export const getRun = (id: string) => fetch(`${API}/runs/${id}`).then(json<RunMeta>);
 
-export const predict = (file: File, models: string[], force = false) => {
+/** A background job on the server (backend/jobs.py). total 0 = no measurable progress in this stage. */
+export type JobState = {
+  id: string;
+  kind: string;
+  state: "running" | "done" | "error";
+  stage: string;
+  done: number;
+  total: number;
+  message: string;
+  result: unknown;
+  error: string | null;
+  elapsed: number;
+};
+export type OnProgress = (job: JobState) => void;
+
+const startJob = (url: string, init?: RequestInit) =>
+  fetch(url, { method: "POST", ...init }).then(json<{ job_id: string }>).then((j) => j.job_id);
+
+/** Polls a job until it finishes; resolves with its result or rejects with its error. */
+export async function waitJob<T>(jobId: string, onProgress?: OnProgress): Promise<T> {
+  for (;;) {
+    const job = await fetch(`${API}/jobs/${jobId}`).then(json<JobState>);
+    onProgress?.(job);
+    if (job.state === "done") return job.result as T;
+    if (job.state === "error") throw new Error(job.error ?? "job failed");
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+export const predict = (file: File, models: string[], onProgress?: OnProgress, force = false) => {
   const fd = new FormData();
   fd.append("image", file);
   models.forEach((m) => fd.append("models", m));
   fd.append("force", String(force));
-  return fetch(`${API}/predict`, { method: "POST", body: fd }).then(
-    json<{ id: string; cached: boolean; meta: RunMeta }[]>,
+  return startJob(`${API}/predict`, { body: fd }).then((id) =>
+    waitJob<{ id: string; cached: boolean; meta: RunMeta }[]>(id, onProgress),
   );
 };
 
@@ -80,8 +109,10 @@ export const getField = async (id: string, kind: string) => {
   return r.ok ? new Float32Array(await r.arrayBuffer()) : null;
 };
 
-export const renderOffAxis = (id: string) =>
-  fetch(`${API}/runs/${id}/offaxis`, { method: "POST" }).then(json<string[]>).then((u) => u.map((x) => API + x));
+export const renderOffAxis = (id: string, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/offaxis`)
+    .then((job) => waitJob<string[]>(job, onProgress))
+    .then((u) => u.map((x) => API + x));
 
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks
