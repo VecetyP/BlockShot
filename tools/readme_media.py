@@ -160,7 +160,7 @@ def _scene_cloud(sc: dict, stride: int):
     return np.concatenate(P), np.concatenate(C), np.concatenate(S)
 
 
-def scene(rid: str, out: str, frame: int = 0, deg: float = 0, back: float = 1.5, rise: float = 1.2, tilt: float = 12,
+def scene(rid: str, out: str, frame: int = 0, deg: float = -6, back: float = 1.5, rise: float = 1.2, tilt: float = 12,
           kblocks: int = 300) -> None:
     sc = store.load_scene(rid)
     frame = int(frame)
@@ -170,14 +170,19 @@ def scene(rid: str, out: str, frame: int = 0, deg: float = 0, back: float = 1.5,
     s = WIDTH / w
     Ko = sc["K"][frame].astype(np.float64) * np.array([[s], [s], [1]])
     hw = (round(h * s), WIDTH)
-    # A swing around the middle would put the camera in a wall of a corridor or room, so step back
-    # `back` and up `rise` (metres; scenes are levelled with up = -y), turn `deg` and look down `tilt`.
+    # Step back `back` and up `rise` (metres; scenes are levelled with up = -y) and look down `tilt`,
+    # then swing `deg` around the point straight ahead at the frame's median depth. A big swing puts
+    # the camera in a wall of a corridor or room; a few degrees shows it from the side.
     c2w = sc["c2w"][frame].astype(np.float64).copy()
     up = np.array([0.0, -1.0, 0.0])
     fwd = c2w[:3, 2] - (c2w[:3, 2] @ up) * up
     fwd /= np.linalg.norm(fwd)
+    pivot = c2w[:3, 3] + float(np.median(sc["depth"][frame][sc["mask"][frame]])) * fwd
     c2w[:3, 3] += rise * up - back * fwd
-    c2w[:3, :3] = _axis_angle(up, deg) @ c2w[:3, :3] @ _axis_angle(np.array([1.0, 0, 0]), -tilt)
+    c2w[:3, :3] = c2w[:3, :3] @ _axis_angle(np.array([1.0, 0, 0]), -tilt)
+    R = _axis_angle(up, deg)
+    c2w[:3, :3] = R @ c2w[:3, :3]
+    c2w[:3, 3] = R @ (c2w[:3, 3] - pivot) + pivot
     view = np.linalg.inv(c2w)
     b = store.minecraft_build(rid, "auto", kblocks, frame=frame)
     panels = [Image.fromarray(rgb).resize(hw[::-1], Image.LANCZOS), splat(P, C, size, Ko, view, hw), blocks(b, Ko, view, hw)]

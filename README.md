@@ -9,8 +9,8 @@ what that one camera saw.
 
 ![A frame of a hallway video, the scene's point cloud from a step back and above, and its Minecraft build from the same spot](docs/hero-corridor.jpg)
 
-*Left: a frame of a walk-through video. Middle: the whole scene's point cloud, seen from a step back
-and above. Right: its Minecraft build, from the same spot.*
+*Left: a frame of a walk-through video. Middle: the whole scene's point cloud, seen from a step back,
+a little above and to the side. Right: its Minecraft build, from the same spot.*
 
 > A personal prototype, developed and tested on Windows with an RTX 3080 Laptop GPU (16 GB). Expect
 > rough edges.
