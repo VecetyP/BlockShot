@@ -227,7 +227,8 @@ main:not(:has(> .banner)) { grid-template-rows: auto minmax(0, 1fr) auto; }
 .tear-list { margin: 0; padding: 0 0 0 26px; font-size: 12px; columns: 2; column-gap: 18px; flex: none; }
 .offaxis { align-self: center; flex: none; }
 .strip-bar {
-  position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  position: sticky; top: 0; z-index: 2; /* above the pinned cards (1), which scroll up under it */
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .strip-bar strong { font-size: 13px; font-weight: 600; }
