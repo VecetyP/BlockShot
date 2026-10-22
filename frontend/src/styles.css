@@ -182,6 +182,10 @@ main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-wid
   box-shadow: 10px 0 12px -6px rgb(0 0 0 / 0.5);
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
 }
+/* The card sticks at the strip's padding edge; cover that gap so images don't show through it. */
+.strip > .mc-card::before {
+  content: ""; position: absolute; top: -1px; bottom: -1px; right: 100%; width: 17px; background: var(--surface);
+}
 .mc-card strong { font-size: 13px; font-weight: 600; }
 .mc-card details { font-size: 12px; color: var(--muted); }
 .mc-card summary { cursor: pointer; color: var(--text); }
