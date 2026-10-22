@@ -16,7 +16,7 @@ from PIL import Image
 from .analysis import integrability, offaxis
 from .analysis.discontinuity import discontinuity, top_tears
 from .analysis.reproject import reprojection_error
-from . import minecraft, video
+from . import minecraft, playground, video
 from .models import registry
 from .models.base import Prediction
 
@@ -191,6 +191,42 @@ def set_above(rid: str, above: bool) -> None:
         _forget(rid)
 
 
+TRUTH_FILE = "truth.json"
+SCORE_FILE = "score.json"
+
+
+def attach_truth(rid: str, truth: dict) -> None:
+    """Stores a playground recording's ground truth with its run (and drops any old score)."""
+    d = RUNS / rid
+    _write_json(d / TRUTH_FILE, truth)
+    (d / SCORE_FILE).unlink(missing_ok=True)
+    meta = load_meta(rid)
+    meta["playground"] = True
+    meta["playground_scene"] = truth.get("scene")
+    _write_json(d / "meta.json", meta)
+
+
+def has_truth(rid: str) -> bool:
+    return (RUNS / rid / TRUTH_FILE).exists()
+
+
+def score(rid: str) -> dict:
+    """How a playground run compares with its ground truth (cached in score.json)."""
+    d = RUNS / rid
+    if (d / SCORE_FILE).exists():
+        return json.loads((d / SCORE_FILE).read_text())
+    truth = json.loads((d / TRUTH_FILE).read_text())
+    meta = load_meta(rid)
+    with _analysis_lock:
+        if is_scene(rid):
+            result = playground.score_scene(load_scene(rid), meta, truth)
+        else:
+            a = load_arrays(rid)
+            result = playground.score_image(a["depth"], a["mask"], meta.get("scale_kind") == "metric", truth)
+    _write_json(d / SCORE_FILE, result)
+    return result
+
+
 def delete_run(rid: str) -> None:
     """Removes a run (image prediction or video scene) from disk and from the in-memory caches."""
     d = (RUNS / rid).resolve()
@@ -240,6 +276,8 @@ def recompute(rid: str, progress=None) -> str:
         if not old.exists():
             aside.rename(old)
         raise
+    if (aside / TRUTH_FILE).exists():  # a playground recording keeps its ground truth
+        attach_truth(new, json.loads((aside / TRUTH_FILE).read_text()))
     shutil.rmtree(aside)
     return new
 

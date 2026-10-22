@@ -148,6 +148,46 @@ well is recorded like a walkthrough:
 - keep the character's own body out of view, e.g. with a free camera or by looking ahead rather than down;
 - avoid teleports and respawns: record each area as its own clip.
 
+## Playground: test with the ground truth
+
+Switch the sidebar from **Upload** to **Playground** for a small first-person world built in the app.
+Because the app draws it, every recording knows exactly where the camera was in every frame and where
+every surface is, so each run gets scored against the truth instead of judged by eye.
+
+- **Scenes:** presets (Room, Courtyard, Block city, Obstacle course), **Shuffle** for a random one, and
+  an editor: **F** places the chosen shape under the crosshair, **X** deletes, **1–4** pick box,
+  pyramid, sphere or cylinder, **[ ]** size, **T** material, **Y** rotate. Your scene is kept in the
+  browser.
+- **Moving:** click the view to look around with the mouse, **WASD** to walk, **Space** to jump,
+  **Shift** to sprint. You can stand on boxes.
+- **Recording:** **R** starts and stops a recording, which goes to the video pipeline with the options
+  under "Recordings go to". **P** sends a snapshot to the models ticked under "Snapshots go to".
+  **Autopilot** records a repeatable path from the scene's start: a loop around the scene, a turn on the
+  spot, or a zig-zag with quick turns.
+- **Game nuisances:** HUD panels with a changing health bar, swinging arms, head bob and fast turns are
+  drawn into the recording, to test the problems gameplay footage has.
+
+Each playground run gets a **Ground truth** card next to its Minecraft card:
+- **Camera angle error:** median, after lining the predicted camera path up with the true one.
+- **Camera position error:** RMS.
+- **Depth error:** median relative error.
+- **Surface error:** median distance from the reconstructed points to the true surfaces.
+- **Scale vs metres:** how far the scene's metres were off.
+- **Recording offset:** the best match between the video's timing and the camera log, or "not
+  measurable" when the motion is too steady to tell.
+
+Measured on the Courtyard preset (60 frames at 4 per second, VGGT):
+
+| | camera angle | camera position | depth | surface |
+|---|---|---|---|---|
+| Autopilot loop | 0.8° | 44 cm over a 72 m path | 2.6% | 19 cm |
+| Zig-zag | 1.1° | 47 cm | 3.5% | 17 cm |
+| Zig-zag with HUD, arms, head bob, fast turns | 31.8° | 7.8 m | 6.7% | 32 cm |
+
+The game nuisances wreck the camera tracking while each frame's depth stays decent. That matches what
+happened with real Roblox footage (see [tools/bakeoff](tools/bakeoff/README.md)), now measured in a
+controlled way.
+
 ## How a build is made
 
 `backend/minecraft.py`:
@@ -251,6 +291,7 @@ Each run is cached in `runs/<image sha>_<model>_<version hash>/` as `prediction.
 | `POST /video` | multipart `video`, `fps`, `max_frames`, `max_side`, `hud`, `geometry` → job |
 | `GET /runs` · `GET /runs/{id}` · `DELETE /runs/{id}` | run metadata · delete a run |
 | `POST /runs/{id}/recompute` | redo a run with the current version → job with its (possibly new) id |
+| `GET /runs/{id}/score` | a playground run's scores against its ground truth (`truth` form field on `/video` and `/predict`) |
 | `GET /runs/{id}/frames/{i}.jpg` | a scene's sampled frames |
 | `POST /runs/{id}/minecraft/build` | build the blocks → job with the summary |
 | `GET /runs/{id}/minecraft.json` | build summary: size, block count, tiles, FOV, pitch, paste offset |

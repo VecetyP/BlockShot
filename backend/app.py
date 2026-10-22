@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import time
 from pathlib import Path
@@ -69,13 +70,15 @@ def cancel_job(job_id: str):
 
 
 @app.post("/predict")
-def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False), above: bool = Form(False)):
+def predict(image: UploadFile = File(...), models: list[str] = Form(...), force: bool = Form(False), above: bool = Form(False),
+            truth: str | None = Form(None)):
     """Starts a job; its result is [{id, cached, meta}] per model. `above`: the picture looks (nearly)
     straight down, a top-down map; also applied to runs that were already cached."""
     unknown = [m for m in models if m not in registry.MODELS]
     if unknown:
         raise HTTPException(400, f"unknown models: {unknown}")
     data, source = image.file.read(), image.filename
+    truth_obj = _parse_truth(truth)
 
     def work(progress):
         out = []
@@ -85,6 +88,8 @@ def predict(image: UploadFile = File(...), models: list[str] = Form(...), force:
                 progress=lambda stage, *_: progress(stage, i, len(models)),
             )
             store.set_above(rid, above)
+            if truth_obj:
+                store.attach_truth(rid, truth_obj)
             out.append({"id": rid, "cached": cached, "meta": store.load_meta(rid)})
         return out
 
@@ -99,18 +104,48 @@ def process_video(
     max_side: int = Form(640),
     hud: bool = Form(True),
     geometry: str = Form("vggt"),
+    truth: str | None = Form(None),
 ):
     """Starts a job reconstructing one scene from a video; its result is {id, cached, meta}."""
     if not (0.2 <= fps <= 15 and 2 <= max_frames <= 300 and 256 <= max_side <= 1280 and geometry in ("moge", "vggt")):
         raise HTTPException(400, "fps 0.2-15, max_frames 2-300, max_side 256-1280, geometry moge|vggt")
     data, source = video.file.read(), video.filename
     settings = {"fps": fps, "max_frames": max_frames, "max_side": max_side, "hud": hud, "geometry": geometry}
+    truth_obj = _parse_truth(truth)
 
     def work(progress):
         rid, meta, cached = store.process_video(data, source, settings, progress)
+        if truth_obj:
+            store.attach_truth(rid, truth_obj)
+            meta = store.load_meta(rid)
         return {"id": rid, "cached": cached, "meta": meta}
 
     return _job("video", work)
+
+
+def _parse_truth(truth: str | None) -> dict | None:
+    """A playground recording's ground truth (see backend/playground.py), checked for the basics."""
+    if not truth:
+        return None
+    try:
+        t = json.loads(truth)
+        assert t["frames"] and all(len(f["p"]) == 3 and len(f["q"]) == 4 for f in t["frames"])
+        assert isinstance(t["objects"], list) and t["fov_deg"] > 0
+    except (ValueError, KeyError, TypeError, AssertionError):
+        raise HTTPException(400, "truth: expected the playground's JSON (frames with p and q, objects, fov_deg)")
+    return t
+
+
+@app.get("/runs/{rid}/score")
+def run_score(rid: str):
+    """A playground run's scores against its ground truth."""
+    _run_or_404(rid)
+    if not store.has_truth(rid):
+        raise HTTPException(404, "this run has no ground truth (only playground recordings do)")
+    try:
+        return store.score(rid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/runs/{rid}/frames/{i}.jpg")

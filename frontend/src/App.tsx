@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
 import { COLOR_MODES, FIELD_MODES, type ColorMode } from "./colors";
+import Playground, {
+  MATERIALS, PRESETS, SHAPES, adoptIds, shuffled,
+  type AutopilotKind, type Material, type Nuisances, type PgScene, type Shape, type Tool, type Truth,
+} from "./Playground";
 import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
 
 const MAX_PANELS = 4;
@@ -13,7 +17,7 @@ const runName = (r: api.RunMeta) => r.source ?? r.id;
 const shortName = (name: string, max = 24) => (name.length <= max ? name : `${name.slice(0, max - 13)}…${name.slice(-12)}`);
 const when = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const runDetail = (r: api.RunMeta) => (api.isScene(r) ? `video · ${r.frames} frames` : shortModel(r));
+const runDetail = (r: api.RunMeta) => (api.isScene(r) ? `video · ${r.frames} frames` : shortModel(r)); // playground runs are named playground_…
 
 const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1 };
 const NAV_KEY = "nav-settings";
@@ -328,6 +332,93 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
   );
 }
 
+function VideoOptions({ value, onChange, legend }: { value: api.VideoSettings; onChange: (v: api.VideoSettings) => void; legend: string }) {
+  return (
+    <fieldset className="models video-opts">
+      <legend>{legend}</legend>
+      <Slider label="Frames/s" min={0.5} max={6} step={0.5} value={value.fps} unit="" onChange={(fps) => onChange({ ...value, fps })} />
+      <Slider label="Max frames" min={8} max={200} step={4} value={value.max_frames} unit="" onChange={(max_frames) => onChange({ ...value, max_frames })} />
+      <label className="slider">
+        <span>Geometry</span>
+        <select value={value.geometry} onChange={(e) => onChange({ ...value, geometry: e.target.value as api.VideoSettings["geometry"] })}>
+          <option value="vggt">VGGT (recommended)</option>
+          <option value="moge">MoGe (sharper, can ghost)</option>
+        </select>
+      </label>
+      <label className="option">
+        <input type="checkbox" checked={value.hud} onChange={(e) => onChange({ ...value, hud: e.target.checked })} />
+        <span>Ignore a static game HUD</span>
+      </label>
+    </fieldset>
+  );
+}
+
+function ModelPicker({ models, picked, onPicked, legend }: { models: api.ModelInfo[]; picked: string[]; onPicked: (p: string[]) => void; legend: string }) {
+  return (
+    <fieldset className="models">
+      <legend>{legend}</legend>
+      {models.map((m) => (
+        <label key={m.name}>
+          <input
+            type="checkbox"
+            checked={picked.includes(m.name)}
+            onChange={(e) => onPicked(e.target.checked ? [...picked, m.name] : picked.filter((x) => x !== m.name))}
+          />
+          <span className="model-name">
+            {m.name}
+            {m.name === RECOMMENDED_MODEL && <span className="badge">Recommended</span>}
+          </span>
+          <small>{m.scale_kind}{m.loaded ? " · loaded" : ""}</small>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+const fmtMetric = (m: api.ScoreMetric) =>
+  m.unit === "rel" ? `${(m.value * 100).toFixed(1)}%`
+  : m.unit === "m" ? (m.value < 1 ? `${(m.value * 100).toFixed(1)} cm` : `${m.value.toFixed(2)} m`)
+  : m.unit === "°" ? `${m.value.toFixed(1)}°`
+  : m.unit === "×" ? `${m.value.toFixed(2)}×`
+  : `${Math.round(m.value)} ${m.unit}`;
+
+/** A playground run's scores against its ground truth. */
+function ScoreList({ id, compact }: { id: string; compact?: boolean }) {
+  const [score, setScore] = useState<api.Score | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setScore(null);
+    setError(null);
+    api.getScore(id).then(setScore).catch((e) => setError(String(e).replace(/^Error: \d+ /, "")));
+  }, [id]);
+  if (error) return <small className="error">{error}</small>;
+  if (!score) return <small>Scoring against the ground truth…</small>;
+  const metrics = compact ? score.metrics.filter((m) => m.verdict !== null) : score.metrics;
+  return (
+    <ul className="scores">
+      {metrics.map((m) => (
+        <li key={m.key} title={m.note}>
+          <span className={`dot ${m.verdict ?? "info"}`} aria-hidden="true" />
+          <span>{m.label}</span>
+          <strong>{fmtMetric(m)}</strong>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ScoreCard({ run }: { run: api.RunMeta }) {
+  return (
+    <div className="mc-card score-card">
+      <div className="mc-head">
+        <strong>Ground truth</strong>
+        <small>playground · {run.playground_scene ?? "scene"}</small>
+      </div>
+      <ScoreList id={run.id} />
+    </div>
+  );
+}
+
 const AUTO_STEPS = [50, 100, 200, 300, 500, 750, 1000, 2000, 4000]; // thousand blocks
 
 /** Mode select plus the one slider that mode needs. */
@@ -377,6 +468,7 @@ function SceneStrip({ run, build, frame, onFrame }: { run: api.RunMeta; build: a
   return (
     <div className="strip">
       <MinecraftCard run={run} settings={build} frame={frame} />
+      {run.playground && <ScoreCard run={run} />}
       {items.map((it, i) => (
         <figure key={it.src} className={`tile ${i === frame ? "current" : ""}`}>
           <button className="thumb" onClick={() => onFrame(i)} onDoubleClick={() => setOpen(i)} aria-label={`View from frame ${i}`} title="Click: view from here · double-click: enlarge">
@@ -431,6 +523,7 @@ function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean
   return (
     <div className="strip">
       {hasDepth && <MinecraftCard run={run} settings={build} frame={0} />}
+      {run.playground && <ScoreCard run={run} />}
       {tile(0, `${label} · input`,
         showTears &&
           tears.map((t, i) => (
@@ -455,6 +548,83 @@ function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean
         )
       )}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
+const PG_KEY = "playground-scene";
+const SHAPE_KEYS: Record<Shape, string> = { box: "1", pyramid: "2", sphere: "3", cylinder: "4" };
+
+function PlaygroundPanel(p: {
+  scene: PgScene; onScene: (s: PgScene) => void; tool: Tool; onTool: (t: Tool) => void;
+  nuisances: Nuisances; onNuisances: (n: Nuisances) => void; onAutopilot: (k: AutopilotKind) => void; recordingBusy: boolean;
+  video: api.VideoSettings; onVideo: (v: api.VideoSettings) => void; models: api.ModelInfo[]; picked: string[]; onPicked: (x: string[]) => void;
+}) {
+  const nuisance = (key: keyof Nuisances, label: string, note: string) => (
+    <label className="option">
+      <input type="checkbox" checked={p.nuisances[key]} onChange={(e) => p.onNuisances({ ...p.nuisances, [key]: e.target.checked })} />
+      <span>{label}<small>{note}</small></span>
+    </label>
+  );
+  return (
+    <div className="pg-panel">
+      <fieldset className="models">
+        <legend>Scene</legend>
+        <label className="slider pg-row">
+          <span>Preset</span>
+          <select value={Object.keys(PRESETS).includes(p.scene.name) ? p.scene.name : ""} onChange={(e) => e.target.value && p.onScene(PRESETS[e.target.value]())}>
+            {!Object.keys(PRESETS).includes(p.scene.name) && <option value="">{p.scene.name}</option>}
+            {Object.keys(PRESETS).map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+        </label>
+        <div className="pg-buttons">
+          <button onClick={() => p.onScene(shuffled(Math.floor(Math.random() * 10000)))}>Shuffle</button>
+          <button onClick={() => p.onScene(PRESETS[Object.keys(PRESETS).includes(p.scene.name) ? p.scene.name : "Courtyard"]())}>Reset</button>
+        </div>
+        <small>{p.scene.objects.length} objects</small>
+      </fieldset>
+
+      <fieldset className="models">
+        <legend>Build</legend>
+        <div className="segmented pg-shapes" role="radiogroup" aria-label="Shape">
+          {SHAPES.map((s) => (
+            <button key={s} role="radio" aria-checked={p.tool.shape === s} className={p.tool.shape === s ? "active" : ""} onClick={() => p.onTool({ ...p.tool, shape: s })} title={`Key ${SHAPE_KEYS[s]}`}>
+              {s}
+            </button>
+          ))}
+        </div>
+        <Slider label="Size" min={0.5} max={12} step={0.5} value={p.tool.size} unit=" m" onChange={(size) => p.onTool({ ...p.tool, size })} />
+        <label className="slider pg-row">
+          <span>Material</span>
+          <select value={p.tool.material} onChange={(e) => p.onTool({ ...p.tool, material: e.target.value as Material })}>
+            {MATERIALS.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </label>
+        <small className="keys-list">
+          <kbd>F</kbd> place · <kbd>X</kbd> delete · <kbd>1</kbd>–<kbd>4</kbd> shape · <kbd>[</kbd><kbd>]</kbd> size · <kbd>T</kbd> material · <kbd>Y</kbd> rotate ({Math.round((p.tool.rot * 180) / Math.PI)}°)
+        </small>
+      </fieldset>
+
+      <fieldset className="models">
+        <legend>Record</legend>
+        <small className="keys-list"><kbd>R</kbd> start / stop recording · <kbd>P</kbd> snapshot</small>
+        <div className="pg-buttons">
+          <button disabled={p.recordingBusy} onClick={() => p.onAutopilot("loop")} title="Walk a circle around the scene, facing its middle">Autopilot: loop</button>
+          <button disabled={p.recordingBusy} onClick={() => p.onAutopilot("turn")} title="Turn on the spot">Turn</button>
+          <button disabled={p.recordingBusy} onClick={() => p.onAutopilot("zigzag")} title="Walk forward with quick turns">Zig-zag</button>
+        </div>
+      </fieldset>
+
+      <fieldset className="models">
+        <legend>Game nuisances (recorded)</legend>
+        {nuisance("hud", "HUD", "Panels and a changing health bar")}
+        {nuisance("arms", "Arms", "Your character's arms, swinging as you walk")}
+        {nuisance("bob", "Head bob", "The camera bobs while walking")}
+        {nuisance("fast", "Fast turns", "Mouse look three times as sensitive")}
+      </fieldset>
+
+      <VideoOptions value={p.video} onChange={p.onVideo} legend="Recordings go to" />
+      <ModelPicker models={p.models} picked={p.picked} onPicked={p.onPicked} legend="Snapshots go to" />
     </div>
   );
 }
@@ -488,6 +658,26 @@ export default function App() {
     return () => window.clearInterval(t);
   }, []);
   const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
+  // Playground (see Playground.tsx): its scene is kept in this browser.
+  const [appMode, setAppMode] = useState<"upload" | "playground">("upload");
+  const [pgScene, setPgSceneState] = useState<PgScene>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PG_KEY) ?? "null");
+      if (saved?.objects) return adoptIds(saved);
+    } catch {}
+    return PRESETS.Courtyard();
+  });
+  const setPgScene = (s: PgScene) => {
+    setPgSceneState(s);
+    try {
+      localStorage.setItem(PG_KEY, JSON.stringify(s));
+    } catch {}
+  };
+  const [tool, setTool] = useState<Tool>({ shape: "box", size: 1.5, material: "brick", rot: 0 });
+  const [nuisances, setNuisances] = useState<Nuisances>({ hud: false, arms: false, bob: false, fast: false });
+  const [autopilot, setAutopilot] = useState<{ kind: AutopilotKind; n: number } | null>(null);
+  const [pgVideo, setPgVideo] = useState<api.VideoSettings>({ fps: 4, max_frames: 60, hud: true, geometry: "vggt" });
+  const [pgResults, setPgResults] = useState<{ id: string; label: string }[]>([]);
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
     setNavState((n) => {
@@ -531,6 +721,41 @@ export default function App() {
     } finally {
       setRunning(null);
     }
+  };
+
+  const stamp = () => new Date().toTimeString().slice(0, 8).replace(/:/g, "");
+  const sendClip = async (blob: Blob, truth: Truth) => {
+    setError(null);
+    setRunning(startingJob("video"));
+    try {
+      const name = `playground_${truth.scene.replace(/\W+/g, "-")}_${stamp()}.webm`;
+      const scene = await api.processVideo(new File([blob], name, { type: "video/webm" }), pgVideo, setRunning, truth);
+      await refreshRuns();
+      setPgResults([{ id: scene.id, label: `Recording · ${truth.frames.length ? truth.frames[truth.frames.length - 1].t.toFixed(1) : 0} s` }]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(null);
+    }
+  };
+  const sendSnapshot = async (png: Blob, truth: Truth) => {
+    if (!picked.length) return setError("Tick at least one model under “Snapshots go to”.");
+    setError(null);
+    setRunning(startingJob("predict"));
+    try {
+      const name = `playground_${truth.scene.replace(/\W+/g, "-")}_${stamp()}.png`;
+      const out = await api.predict(new File([png], name, { type: "image/png" }), picked, setRunning, false, false, truth);
+      await refreshRuns();
+      setPgResults(out.map((r) => ({ id: r.id, label: `Snapshot · ${shortModel(r.meta)}` })));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(null);
+    }
+  };
+  const openRun = (id: string) => {
+    setAppMode("upload");
+    setSelected([id]);
   };
 
   const remove = async (r: api.RunMeta) => {
@@ -577,6 +802,21 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <h1 className="brand">BlockShot</h1>
+        <div className="segmented mode-switch" role="tablist" aria-label="Mode">
+          {(["upload", "playground"] as const).map((m) => (
+            <button key={m} role="tab" aria-selected={appMode === m} className={appMode === m ? "active" : ""} onClick={() => setAppMode(m)}>
+              {m === "upload" ? "Upload" : "Playground"}
+            </button>
+          ))}
+        </div>
+        {appMode === "playground" ? (
+          <PlaygroundPanel
+            scene={pgScene} onScene={setPgScene} tool={tool} onTool={setTool} nuisances={nuisances} onNuisances={setNuisances}
+            onAutopilot={(kind) => setAutopilot((a) => ({ kind, n: (a?.n ?? 0) + 1 }))} recordingBusy={!!running}
+            video={pgVideo} onVideo={setPgVideo} models={models} picked={picked} onPicked={setPicked}
+          />
+        ) : (
+        <>
         <section
           className={`drop ${file ? "has-file" : ""}`}
           onDragOver={(e) => e.preventDefault()}
@@ -589,41 +829,12 @@ export default function App() {
           </label>
         </section>
         {isVideo ? (
-          <fieldset className="models video-opts">
-            <legend>Video → scene</legend>
-            <Slider label="Frames/s" min={0.5} max={6} step={0.5} value={video.fps} unit="" onChange={(fps) => setVideo((v) => ({ ...v, fps }))} />
-            <Slider label="Max frames" min={8} max={200} step={4} value={video.max_frames} unit="" onChange={(max_frames) => setVideo((v) => ({ ...v, max_frames }))} />
-            <label className="slider">
-              <span>Geometry</span>
-              <select value={video.geometry} onChange={(e) => setVideo((v) => ({ ...v, geometry: e.target.value as api.VideoSettings["geometry"] }))}>
-                <option value="vggt">VGGT (recommended)</option>
-                <option value="moge">MoGe (sharper, can ghost)</option>
-              </select>
-            </label>
-            <label className="option">
-              <input type="checkbox" checked={video.hud} onChange={(e) => setVideo((v) => ({ ...v, hud: e.target.checked }))} />
-              <span>Ignore a static game HUD</span>
-            </label>
+          <>
+            <VideoOptions value={video} onChange={setVideo} legend="Video → scene" />
             <small className="note">Move slowly and keep things in view between frames. Each frame takes about a second.</small>
-          </fieldset>
+          </>
         ) : (
-        <fieldset className="models">
-          <legend>Models</legend>
-          {models.map((m) => (
-            <label key={m.name}>
-              <input
-                type="checkbox"
-                checked={picked.includes(m.name)}
-                onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.name] : p.filter((x) => x !== m.name)))}
-              />
-              <span className="model-name">
-                {m.name}
-                {m.name === RECOMMENDED_MODEL && <span className="badge">Recommended</span>}
-              </span>
-              <small>{m.scale_kind}{m.loaded ? " · loaded" : ""}</small>
-            </label>
-          ))}
-        </fieldset>
+          <ModelPicker models={models} picked={picked} onPicked={setPicked} legend="Models" />
         )}
         {!isVideo && (
           <label className="option" title="Angled and tilted shots are levelled automatically without it. Applies to the picture's runs, already made ones included.">
@@ -639,7 +850,19 @@ export default function App() {
         ) : (
           <button className="primary" disabled={!file || (!isVideo && !picked.length)} onClick={run}>Run</button>
         )}
+        </>
+        )}
+        {appMode === "playground" && running && <ProgressBar job={running} />}
         {error && <p className="error">{error}</p>}
+        {appMode === "playground" && !running && pgResults.map((r) => (
+          <div key={r.id} className="pg-result">
+            <div className="pg-result-head">
+              <strong>{r.label}</strong>
+              <button className="quiet" onClick={() => openRun(r.id)}>Open</button>
+            </div>
+            <ScoreList id={r.id} compact />
+          </div>
+        ))}
 
         <header className="history-head">
           <h2>History</h2>
@@ -679,12 +902,19 @@ export default function App() {
         </ul>
       </aside>
 
-      <main>
+      <main className={appMode === "playground" ? "pg-mode" : undefined}>
         {stale && (
           <p className="banner" role="status">
             BlockShot was updated while it was running. Close both BlockShot windows and run <code>run.bat</code> again to use the new version.
           </p>
         )}
+        {appMode === "playground" ? (
+          <Playground
+            scene={pgScene} onScene={setPgScene} tool={tool} onTool={setTool} nuisances={nuisances}
+            autopilot={autopilot} onAutopilotDone={() => {}} onClip={sendClip} onSnapshot={sendSnapshot}
+          />
+        ) : (
+        <>
         <div className="toolbar">
           <div className="segmented" role="radiogroup" aria-label="Color mode">
             {COLOR_MODES.map((m) => (
@@ -763,6 +993,8 @@ export default function App() {
               ),
             )}
           </div>
+        )}
+        </>
         )}
       </main>
     </div>

@@ -16,6 +16,8 @@ export type RunMeta = {
   up?: number[]; // the direction treated as up, in the cloud's (OpenCV) axes (GET /runs/{id} only)
   above?: boolean; // an image seen from (nearly) straight above, like a top-down map
   outdated?: boolean; // made by an older version: Recompute would change it (GET /runs only)
+  playground?: boolean; // recorded in the playground, with ground truth (see GET /runs/{id}/score)
+  playground_scene?: string;
   frames?: number;
   cameras?: { c2w: number[][]; K: number[][] }[]; // per frame, OpenCV axes
   [k: string]: unknown;
@@ -92,12 +94,13 @@ export async function waitJob<T>(jobId: string, onProgress?: OnProgress, signal?
   }
 }
 
-export const predict = (file: File, models: string[], onProgress?: OnProgress, force = false, above = false) => {
+export const predict = (file: File, models: string[], onProgress?: OnProgress, force = false, above = false, truth?: object) => {
   const fd = new FormData();
   fd.append("image", file);
   models.forEach((m) => fd.append("models", m));
   fd.append("force", String(force));
   fd.append("above", String(above));
+  if (truth) fd.append("truth", JSON.stringify(truth));
   return startJob(`${API}/predict`, { body: fd }).then((id) =>
     waitJob<{ id: string; cached: boolean; meta: RunMeta }[]>(id, onProgress),
   );
@@ -122,11 +125,21 @@ export async function getCloud(id: string): Promise<Cloud> {
 export type VideoSettings = { fps: number; max_frames: number; hud: boolean; geometry: "moge" | "vggt" };
 
 /** Reconstructs one scene from a video (cached by video + settings). */
-export const processVideo = (file: File, s: VideoSettings, onProgress?: OnProgress) => {
+export const processVideo = (file: File, s: VideoSettings, onProgress?: OnProgress, truth?: object) => {
   const fd = new FormData();
   fd.append("video", file);
   Object.entries(s).forEach(([k, v]) => fd.append(k, String(v)));
+  if (truth) fd.append("truth", JSON.stringify(truth));
   return startJob(`${API}/video`, { body: fd }).then((id) => waitJob<{ id: string; cached: boolean; meta: RunMeta }>(id, onProgress));
+};
+
+/** A playground run scored against its ground truth (backend/playground.py). verdict: null = informational. */
+export type ScoreMetric = { key: string; label: string; value: number; unit: string; verdict: "good" | "ok" | "poor" | null; note: string };
+export type Score = { kind: "scene" | "image"; metrics: ScoreMetric[] };
+const scores = new Map<string, Promise<Score>>();
+export const getScore = (id: string) => {
+  if (!scores.has(id)) scores.set(id, fetch(`${API}/runs/${id}/score`).then(json<Score>));
+  return scores.get(id)!;
 };
 
 export const frameUrl = (id: string, i: number) => `${API}/runs/${id}/frames/${i}.jpg`;

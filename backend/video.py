@@ -71,13 +71,17 @@ def sample_frames(path: str, s: Settings, progress=_quiet) -> tuple[list[np.ndar
         raise ValueError("could not open the video (unsupported format?)")
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    step = max(1, round(src_fps / s.fps))
-    kept, last, read, dups, i = [], None, 0, 0, 0
+    # Sample by each frame's timestamp, not its index: browser recordings (WebM) have variable frame
+    # timing and can report a nonsense frame rate. Falls back to index / fps without timestamps.
+    kept, times, last, read, dups, i, next_t = [], [], None, 0, 0, 0, 0.0
     while True:
         ok = cap.grab()
         if not ok:
             break
-        if i % step == 0:
+        ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+        t = ms / 1000 if ms > 0 or i == 0 else i / src_fps
+        if t >= next_t - 1e-6:
+            next_t = (int(t * s.fps + 1e-6) + 1) / s.fps  # the next slot on the fps grid
             progress("reading video", i, total)
             ok, bgr = cap.retrieve()
             if not ok:
@@ -92,14 +96,17 @@ def sample_frames(path: str, s: Settings, progress=_quiet) -> tuple[list[np.ndar
                 dups += 1
             else:
                 kept.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+                times.append(round(t, 4))
                 last = thumb
         i += 1
     cap.release()
     if len(kept) > s.max_frames:
-        kept = [kept[j] for j in np.linspace(0, len(kept) - 1, s.max_frames).round().astype(int)]
+        pick = np.linspace(0, len(kept) - 1, s.max_frames).round().astype(int)
+        kept, times = [kept[j] for j in pick], [times[j] for j in pick]
     if len(kept) < 2:
         raise ValueError("need at least 2 distinct frames; is the camera moving?")
-    return kept, {"video_fps": round(src_fps, 2), "frames_read": read, "duplicates_dropped": dups, "frames": len(kept)}
+    return kept, {"video_fps": round(src_fps, 2), "frames_read": read, "duplicates_dropped": dups, "frames": len(kept),
+                  "frame_times_s": times}
 
 
 def hud_mask(frames: list[np.ndarray]) -> np.ndarray | None:
