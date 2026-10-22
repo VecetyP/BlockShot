@@ -93,9 +93,11 @@ worked out fresh whenever a run is viewed.
 
 How it works (`backend/video.py`):
 
-1. VGGT reads all frames in one pass, up to 40k image patches: 51 phone frames, landscape or
-   portrait, with each frame's longer side at 518 px (peak 11.3 GB of GPU memory). Longer clips go in overlapping chunks of that
-   size, joined with a similarity fit on the shared frames. It gives every frame's camera pose and depth in one
+1. VGGT reads all frames in one pass, up to 48k image patches: the default 60 frames, landscape or
+   portrait, with each frame's longer side at 518 px (21 s, peak 9.4 GB of GPU memory). Longer clips go
+   in overlapping chunks of that size, joined with a similarity fit on the shared frames, but one pass
+   is better: on a playground clip, two chunks put the cameras 99 cm off where one pass got 57 cm.
+   It gives every frame's camera pose and depth in one
    frame of reference, so a frame that comes back to something already seen agrees with the first
    view of it.
 2. MoGe, on six frames, sets the scale in metres.

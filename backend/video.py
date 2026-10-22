@@ -34,8 +34,8 @@ from .models import registry
 from .models import vggt as vggt_model
 from .models.base import unproject
 
-PIPELINE = 9  # bump when reconstruction changes, so cached scenes are rebuilt (9: sky removed by MoGe)
-PASS_PATCHES = 40_000  # image patches VGGT gets in one pass: 51 phone frames (58 portrait frames, 45k patches, peaked at 11.8 GB)
+PIPELINE = 10  # bump when reconstruction changes, so cached scenes are rebuilt (10: 60 frames in one VGGT pass)
+PASS_PATCHES = 48_000  # image patches VGGT gets in one pass: the default 60 frames (46.6k patches, 21 s, 9.4 GB peak); chunks joined afterwards were twice as far off on a playground clip
 # Longer clips go in overlapping chunks of that size, a quarter shared, joined on the shared frames.
 DUP_DIFF = 0.012  # a frame this close (mean abs difference, 0..1) to the last kept one is dropped
 LOW_CONF_PCT = 20  # per frame, VGGT's least confident 20% of pixels are ignored...
