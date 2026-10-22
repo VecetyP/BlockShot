@@ -1,25 +1,35 @@
 # BlockShot
 
-**Turn any image into a Minecraft build that looks exactly like it from one spot.**
+**Turn images and videos into Minecraft builds.**
 
-Drop in a screenshot, a photo or a painting. A monocular 3D model rebuilds the scene as a point
-cloud, BlockShot turns that cloud into blocks, and you get a WorldEdit schematic. Paste it, stand
-where the camera was, and the build lines up with the original image. Walk away, and it falls apart
-into the façade it really is.
+Drop in a screenshot, a photo or a walk-through video. A 3D model rebuilds the scene as a point cloud,
+BlockShot turns the cloud into blocks, and you get a WorldEdit schematic. Stand where the camera was,
+and the build lines up with the original picture. Walk away, and it turns out to be a sculpture of
+what that one camera saw.
 
-Or drop in a **video**: a walk through a room, or a screen recording of a game. BlockShot aligns the
-frames into one scene and builds the whole space, viewable from any frame.
+![A Minecraft screenshot, its point cloud seen from the original camera, and the same cloud from 30° to the side](docs/hero-tower.jpg)
 
-![A Minecraft screenshot, its block build seen from the original camera, and the same build from 30° to the side](docs/minecraft.jpg)
+*Left: the input screenshot. Middle: the point cloud, seen from the input camera. Right: the same
+cloud from 30° to the side.*
 
-*Left: the input screenshot. Middle: the generated build, seen from the input camera. Right: the same
-build from 30° to the side.*
+> A personal prototype, developed and tested on Windows with an RTX 3080 Laptop GPU (16 GB). Expect
+> rough edges.
+
+## What it does
+
+- **Image → Minecraft build.** One picture becomes a point cloud and a block build you can paste in
+  game, lined up with your view.
+- **Video → one scene.** A walk-through clip becomes one consistent scene, viewable from any of its
+  frames, and a build from any of them.
+- **Playground.** A small 3D world inside the app: build a scene, walk through it, record, and see
+  the reconstruction scored against the exact ground truth.
+- **3D lab.** Compare models side by side, with depth, normal and analysis maps. Where the project
+  started: studying how 3D models read optical illusions.
 
 ## Quick start
 
-You need [uv](https://docs.astral.sh/uv/), Node.js, and ideally an NVIDIA GPU. It was developed on
-an RTX 3080 Laptop (16 GB); everything also runs on CPU, slowly. PyTorch comes from the CUDA 13.0
-wheel index, which needs NVIDIA driver 580 or newer.
+You need [uv](https://docs.astral.sh/uv/), Node.js, and ideally an NVIDIA GPU; everything also runs on
+CPU, slowly. PyTorch comes from the CUDA 13.0 wheel index, which needs NVIDIA driver 580 or newer.
 
 ```bash
 uv sync
@@ -37,22 +47,16 @@ cd frontend && corepack pnpm install && corepack pnpm dev   # http://localhost:5
 
 Model weights download from Hugging Face on first use.
 
-## Make a build
+## Image → Minecraft build
 
-1. Drop an image on the drop zone, keep **moge** ticked (recommended), and press **Run**. Anything
-   slow (loading weights, predicting, building, exporting) shows a progress bar.
-2. In the **Minecraft build** bar under the 3D view, choose how big a block is:
-   - **Auto** (default): about *N* thousand blocks in total, 50k–4M. Detail follows the scene, so a
-     city and a room both get a few hundred thousand blocks.
-   - **Real size**: one block = *x* metres. Metric models (MoGe, video scenes) only.
-   - **Fit longest side**: the longest side is *N* blocks.
+1. Drop an image on the drop zone, keep **moge** ticked (recommended), and press **Run**.
+2. Pick a block size in the **Minecraft build** bar (**Auto** is fine to start), tick **Show as
+   blocks** to preview, and press **Snap to input camera** to see it from where it matches.
+3. Press **Download .schem** on the run's card. Big builds come as a zip of 128 × 128 tiles.
 
-   A budget of 4M blocks enlarges the blocks, with a warning, if a setting would go past it.
-3. Tick **Show as blocks** to preview the build in 3D, and press **Snap to input camera** to see it
-   from the spot where it matches. Previews above 400k blocks merge blocks into bigger cubes;
-   downloads are always full detail.
-4. Press **Download .schem** on the run's card. Builds wider or longer than 128 blocks come as a
-   **zip of 128 × 128 tiles** instead, with a `paste-commands.txt`.
+![A photo, its point cloud from the camera, and from 30° to the side](docs/photo-waterfall.jpg)
+
+<img src="docs/orbit.gif" width="560" alt="The tower's point cloud swinging away from the camera and back">
 
 Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
 
@@ -61,273 +65,80 @@ Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
 2. Stand where the picture should be seen from, and turn to the yaw and pitch on the card:
    `/tp @s ~ ~ ~ <yaw> <pitch>`.
 3. `//schem load <file name>`, then `//paste`. The paste is offset so the image's camera lands at
-   your eyes. For tiles, load and paste each one without moving: every tile carries its own offset
-   from the same standing spot, so they assemble around you.
-4. Set **Options → FOV** to the number on the card (the camera's vertical field of view), turn
-   **FOV Effects** off, and press **F1** to hide the HUD.
+   your eyes. For tiles, load and paste each one without moving; they assemble around you.
+4. Set **Options → FOV** to the number on the card, turn **FOV Effects** off, and press **F1** to
+   hide the HUD.
 
-Schematics use Minecraft 1.20.1 block data (DataVersion 3465) and load in 1.20 and newer. A
-build taller than 384 blocks (the world's build height) gets a warning.
+Schematics load in Minecraft 1.20 and newer. More on block sizes, the palette and the models:
+[docs/builds.md](docs/builds.md).
 
-## From a video
+## Video → one scene
 
-Drop an `mp4`, `mov` or `webm` instead of an image. The options:
+Drop an `mp4`, `mov` or `webm` instead of an image. All frames are placed in one scene; pick any
+frame to view the scene, and its build, from that frame's camera.
 
-- **Frames/s** (default 2) and **Max frames** (default 60): how densely the clip is sampled.
-  Near-duplicate frames (a camera standing still) are dropped.
-- **Geometry:** *VGGT depth* (default: the frames agree with each other) or *MoGe detail* (sharper
-  per-frame depth bent onto VGGT's shape, but with more ghosting).
-- **Ignore a static game HUD** (on): pixels that stay still while the picture moves, such as a
-  crosshair, hotbar or minimap, are left out of the scene.
-- **Vertical FOV** (empty = auto): the camera's vertical field of view in degrees, if you know it.
-  Games usually show it in their settings (Roblox and Minecraft default to 70). Otherwise VGGT
-  guesses it, and it tends to guess wide views too narrow. That bends every frame so they don't line
-  up: on a playground loop the surfaces came out 10.8 cm off with the guess, and 8.5 cm with the
-  real FOV.
+<img src="docs/walk-hallway.gif" width="440" alt="Walking along a reconstructed hallway"> <img src="docs/walk-balcony.gif" width="440" alt="Walking along a reconstructed balcony corridor">
 
-The result is a **scene**: one point cloud from all frames, shown with a **View from frame** slider
-and a strip of the sampled frames. Click a frame to view the scene, and its build, from that frame's
-camera. The Minecraft build is seen from the chosen frame, with floors levelled from the average
-camera "up". Stand there in game the same way as for an image.
+*Walking through two reconstructed clips, each built from its frames' depth and camera poses.*
 
-A scene keeps the result of every step above, so improvements to them only reach scenes made
-afterwards. History tags older ones **older version**; tick them and press **Recompute** to redo
-them. The video isn't kept, so they are redone from their stored frames. Image runs only store the
-model's output, so they are tagged only when that model changes; levelling, builds and analysis are
-worked out fresh whenever a run is viewed.
+Move slowly, with each moment overlapping the last. For game footage, hide the HUD and enter the
+game's **Vertical FOV** if you know it. Options, recording tips and how it works:
+[docs/video.md](docs/video.md).
 
-How it works (`backend/video.py`):
+## Playground
 
-1. VGGT reads all frames in one pass, up to 48k image patches: the default 60 frames, landscape or
-   portrait, with each frame's longer side at 518 px (21 s, peak 9.4 GB of GPU memory). Longer clips go
-   in overlapping chunks of that size, joined with a similarity fit on the shared frames, but one pass
-   is better: on a playground clip, two chunks put the cameras 99 cm off where one pass got 57 cm.
-   It gives every frame's camera pose and depth in one
-   frame of reference, so a frame that comes back to something already seen agrees with the first
-   view of it.
-2. MoGe, on six frames, sets the scale in metres.
-3. **Levelling.** The scene is turned so its floors are horizontal and walls vertical, found the same
-   way as for images, so a phone held at an angle (36 degrees in one test clip) still gives a level
-   scene and build.
-4. **Ghost removal.** A point is dropped when more frames saw straight through it (it floats in front
-   of everything they saw near there) than saw it. Glass reflections and the edges of objects go;
-   walls, perforated screens and shiny floors that many frames agree on stay. It can also remove a
-   person walking through the shot.
-5. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
-   pixels of each frame, so close walls don't come out as sparse dots.
+Switch the sidebar to **Playground** for a small first-person world: presets or your own blocks,
+**WASD** to walk, **R** to record. The recording goes through the video pipeline, and because the app
+drew the scene, the result is scored against the exact camera path and surfaces.
 
-Why VGGT's depth and not MoGe's: on a 24-frame clip of a kitchen, walking and turning around, two
-frames agree within 5% on 62% of the points they share when each frame uses MoGe's depth. 12.8% of
-points float in space another frame saw as empty, and those ghosts are what makes objects come out
-doubled and see-through. MoGe's guess bends the room a little differently in every frame, and no
-per-frame scale fixes a bend. VGGT's depth is predicted together with the poses; with ghost removal,
-82% agree and 2.9% float, keeping 97% of the pixels. It is faster too: 47 s instead of 104 s for
-that clip. (A stricter first version reached 0.4%, but kept only 58% of a hallway clip: dropping
-VGGT's least confident pixels took plain walls and shiny floors with them, and the filter took a
-perforated brick wall. Now 94% of that hallway stays. Unsure pixels are only dropped when far away.)
+<img src="docs/playground.gif" width="552" alt="Recording a walk around the Courtyard preset, then its ground-truth score card">
 
-The sky is removed by MoGe's mask, a quick coarse pass on every frame (about 0.25 s each). A plain
-sky gives VGGT nothing to measure, so it places it just past the walls. On a playground clip, where
-sky covered 40% of each frame, up to 66% of it stayed in the scene as a pale dome. With the mask, 1%
-stays, and three indoor clips lost none of their points to it.
+Game-like nuisances (HUD, swinging arms, head bob, fast turns) can be switched on to test gameplay
+footage. Details and measurements: [docs/playground.md](docs/playground.md).
 
-Measured on an RTX 3080 Laptop (16 GB) with a synthetic 10 s room walkthrough rendered from known
-camera poses (20 frames at 640 × 360):
+## 3D lab
 
-| | |
+Tick up to four runs in History to compare them side by side, in RGB, depth, confidence or analysis
+colours, with their maps underneath. See [docs/lab.md](docs/lab.md).
+
+![Two runs compared side by side](docs/lab.jpg)
+
+## What works, and what doesn't yet
+
+- **Works well:** screenshots and photos with clear structure; slow walk-throughs of rooms, hallways
+  and streets.
+- **A build is one view deep.** Surfaces are one block thick, and nothing exists behind what the
+  camera saw.
+- **Real-size builds are approximate.** Metres from a single camera can be 15–50% off.
+- **Frantic gameplay doesn't map yet.** Swinging arms, changing HUDs, snap turns and respawns break
+  the camera tracking.
+- **Wide fields of view** (many games) are guessed too narrow unless you enter the FOV.
+- **Circling an object up close** gives frames that disagree, and holes where they do.
+
+## For developers
+
+The backend is FastAPI (`backend/`), the web app Vite + React + three.js (`frontend/`).
+
+| Where | What |
 |---|---|
-| Total time (MoGe depth on every frame, before ghost removal) | 51 s: poses 15 s, depth 34 s |
-| Camera rotation error | 0.7° (median) |
-| Camera position error | 2.8 cm (RMS, after aligning scale) |
-| Surface error | 24–28 cm (median) |
-| VGGT, 64 frames in one pass | 26 s, 9.8 GB peak VRAM |
-
-**Limits.** Fast motion, motion blur and blank walls can throw the poses off. Circling an object up
-close is the hardest case: on a 29 s clip walking around a chair at about 1 m (462° of turning),
-neighbouring frames agreed on only 55% of points (93% on a hallway walk), and ghost removal leaves
-holes where the views disagree. Keep the camera moving
-slowly, with each frame overlapping the last. MoGe's metres were 1.56× off on the synthetic room, so
-treat real-size builds from video as approximate. Ghost removal checks each frame against up to 24
-others spread over the clip: about 20 s for 50 frames.
-
-**Gameplay recordings.** Frantic first-person gameplay doesn't map. A 35 s Roblox run with swinging arms,
-changing HUD bars, snap turns and a respawn reached 8–29% neighbour agreement, and no newer model fixed
-it. Pi3X and MapAnything were tried; see [tools/bakeoff](tools/bakeoff/README.md). Game footage that maps
-well is recorded like a walkthrough:
-- turn slowly, with each moment overlapping the last;
-- hide the HUD if the game allows it;
-- keep the character's own body out of view, e.g. with a free camera or by looking ahead rather than down;
-- avoid teleports and respawns: record each area as its own clip.
-
-## Playground: test with the ground truth
-
-Switch the sidebar from **Upload** to **Playground** for a small first-person world built in the app.
-Because the app draws it, every recording knows exactly where the camera was in every frame and where
-every surface is, so each run gets scored against the truth instead of judged by eye.
-
-- **Scenes:** presets (Room, Courtyard, Block city, Obstacle course), **Shuffle** for a random one, and
-  an editor: **F** places the chosen shape under the crosshair, **X** deletes, **1–4** pick box,
-  pyramid, sphere or cylinder, **[ ]** size, **T** material, **Y** rotate. Your scene is kept in the
-  browser.
-- **Moving:** click the view to look around with the mouse, **WASD** to walk, **Space** to jump,
-  **Shift** to sprint. You can stand on boxes.
-- **Recording:** **R** starts and stops a recording, which goes to the video pipeline with the options
-  under "Recordings go to", plus the playground camera's field of view (as you'd enter it for a
-  game). **P** sends a snapshot to the models ticked under "Snapshots go to".
-  **Autopilot** records a repeatable path from the scene's start: a loop around the scene, a turn on the
-  spot, or a zig-zag with quick turns.
-- **Game nuisances:** HUD panels with a changing health bar, swinging arms, head bob and fast turns are
-  drawn into the recording, to test the problems gameplay footage has.
-
-Each playground run gets a **Ground truth** card next to its Minecraft card:
-- **Camera angle error:** median, after lining the predicted camera path up with the true one.
-- **Camera position error:** RMS.
-- **Depth error:** median relative error.
-- **Surface error:** median distance from the reconstructed points to the true surfaces.
-- **Scale vs metres:** how far the scene's metres were off.
-- **Recording offset:** the best match between the video's timing and the camera log, or "not
-  measurable" when the motion is too steady to tell.
-
-Measured on the Courtyard preset (60 frames at 4 per second, VGGT):
-
-| | camera angle | camera position | depth | surface |
-|---|---|---|---|---|
-| Autopilot loop | 0.8° | 44 cm over a 72 m path | 2.6% | 13 cm |
-| Zig-zag | 1.1° | 47 cm | 3.5% | 17 cm |
-| Zig-zag with HUD, arms, head bob, fast turns | 31.8° | 7.8 m | 6.7% | 32 cm |
-
-The game nuisances wreck the camera tracking while each frame's depth stays decent. That matches what
-happened with real Roblox footage (see [tools/bakeoff](tools/bakeoff/README.md)), now measured in a
-controlled way.
-
-## How a build is made
-
-`backend/minecraft.py`:
-
-1. **Point cloud.** The chosen model predicts a 3D point for every pixel, in the camera's frame.
-2. **Axes.** The cloud is turned into Minecraft's axes with the camera facing south (+z), so the
-   image's right side goes west. "Up" comes from the picture's structure: floors, roofs and walls
-   are square to each other, so the build finds those three axes from the surface directions and
-   takes the one nearest the camera's own up. A tilted photo, or a city shot 40 degrees from above,
-   still builds level, and the card gives the pitch to look down at it. The 3D view is levelled the
-   same way. For a map shot straight down, tick **Top-down map** next to Run (straight down, the
-   ground's axis and a wall's are a toss-up); it is kept with the picture's runs. Video scenes are
-   levelled when they're made (see [From a video](#from-a-video)) and built once: choosing another
-   frame only changes where you stand, your yaw and pitch, and the FOV.
-3. **Blocks.** The surface between neighbouring pixels is filled in, except across depth jumps, and
-   snapped to a grid whose spacing comes from the block-size setting. The outermost 0.5% of points on
-   each axis are ignored, so stray points don't shrink the build, and blocks within 4 of the eye are
-   dropped so they don't fill the view in game.
-4. **Colours.** Each block's colour is the mean of its points in linear light. The block placed is
-   the palette entry closest in CIELAB, a perceptual colour space.
-5. **Schematic.** A Sponge v2 `.schem` with WorldEdit's paste offset set from the camera position,
-   and the vertical FOV from the model's estimated camera. Tiles each carry the global offset plus
-   their own origin.
-
-The palette (`backend/minecraft_palette.json`) holds 153 blocks from 1.20.1: all concrete, wool,
-terracotta and planks, plus deepslate, tuff, mud bricks, waxed copper, stones, bricks, storage blocks
-and others that look the same on every face and don't
-fall, glow, or let light through. Each entry is the mean colour of the block's texture, measured from
-a Minecraft jar by `tools/minecraft_palette.py`. Only those numbers are in this repo, no game files.
-
-**What to expect.** A build is a single-view sculpture: surfaces are one block thick, and nothing
-exists behind what the camera saw. The image's own lighting is baked into the block choice, and
-Minecraft shades block faces again, so faces can come out slightly darker in game.
-
-## Models
-
-| Model | Weights | Output | Licence | VRAM (weights / peak) |
-|---|---|---|---|---|
-| **`moge`** · *recommended* | Ruicheng/moge-3-vitl (MoGe 3.0.0) | metric point map, camera intrinsics, mask, normals | MIT (DINOv2 parts Apache-2.0) | 1.4 / 2.4 GB |
-| `depth_anything` | Depth-Anything-V2-Small-hf (`DEPTH_ANYTHING_SIZE=Base\|Large`) | relative depth; assumes a 60° camera | Small: Apache-2.0; Base/Large: CC-BY-NC-4.0 | 0.1 / 0.2 GB |
-| `vggt` | facebook/VGGT-1B, single image | depth, confidence, intrinsics | weights non-commercial | 4.7 / 7.0 GB |
-| `marigold_normals` | prs-eth/marigold-normals-v1-1 | surface normals only (no depth, so no build) | CreativeML Open RAIL++-M | 2.4 / 3.8 GB |
-
-MoGe gives the best-looking builds: it estimates the real camera, so the FOV and proportions come out
-right, and it masks out sky and empty background. All four models loaded together use about 10.6 GB
-of VRAM.
-
-Notes:
-
-- Depth Anything predicts disparity; `depth = 1/disparity`, and the raw disparity is kept.
-- MoGe's refinement stage needs CUDA (Triton kernels). On CPU it runs without refinement, and that
-  setting is part of the run's cache key.
-- VGGT's depth confidence is stored raw and mapped to `1 − 1/conf` for display.
-- `vggt`'s `numpy<2` pin is overridden in `pyproject.toml`; it runs fine on numpy 2.
-
-## Also in the box: a single-image 3D lab
-
-BlockShot grew out of a playground for studying how these models handle images, especially optical
-illusions and impossible figures. All of that is still here.
-
-![comparison view](docs/comparison.jpg)
-
-- **Exact camera.** The 3D view projects through each run's own intrinsics, so **Snap to input
-  camera** reproduces the input pixel for pixel.
-- **Comparison grid.** Tick up to four runs in History. Moving in one panel moves all of them;
-  poses are shared in units of each cloud's median depth, so metric and relative models stay aligned.
-- **Navigation.** First person: drag to look around from where you stand, scroll to move forward
-  or back. **W/A/S/D** fly, **Q/E** down/up, **Shift** faster, with speeds and point size under **View** in the toolbar.
-- **Colour modes:** RGB, depth, confidence, discontinuity, curl, residual.
-- **2D strip:** input, depth, confidence, normals and analysis maps. Click any image to enlarge it.
-- **Integrability** (`backend/analysis/integrability.py`): how much of a model's predicted normal
-  field no real surface could produce.
-  - It uses a Helmholtz–Hodge split (a Poisson solve) on the perspective-exact gradient
-    `∇log z = −(nₓ, n_y)/(n·r)`, where r is the pixel's viewing ray.
-  - Depth-derived gradients score 0 by construction.
-  - A synthetic sphere scores 0.05%, and a hand-built Penrose-triangle normal field scores 22%,
-    spread around the loop.
-- **Tears** (`discontinuity.py`): depth jumps scaled by distance, with the top 20 marked in 3D and on
-  the image.
-- **Off-axis renders** (`offaxis.py`): the cloud re-rendered at ±5°, ±15° and ±30°, to watch an
-  illusion fall apart as you leave its viewpoint.
-- **Reprojection check** (`reproject.py`): 0.000 px for every depth model.
-
-`samples/generate.py` draws a Penrose triangle and a Necker cube; `samples/` also has a few rendered
-3D figures as controls. A CLI writes runs too:
+| `backend/minecraft.py` | point cloud → levelled blocks → schematic ([docs/builds.md](docs/builds.md)) |
+| `backend/video.py` | frames → VGGT poses and depth, sky and ghost removal, levelling ([docs/video.md](docs/video.md)) |
+| `backend/playground.py` | ground-truth ray casting and scoring ([docs/playground.md](docs/playground.md)) |
+| `backend/models/` | MoGe, VGGT, Depth Anything, Marigold wrappers |
+| `backend/analysis/` | integrability, tears, off-axis renders ([docs/lab.md](docs/lab.md)) |
+| `backend/app.py` | the HTTP API ([docs/api.md](docs/api.md)) |
+| `tools/bakeoff/` | the gameplay-footage model comparison |
 
 ```bash
-uv run python -m backend.cli predict samples/penrose_triangle.png --model moge
-```
-
-Each run is cached in `runs/<image sha>_<model>_<version hash>/` as `prediction.npz`, `points.ply`
-(RGB, camera frame: +X right, +Y down, +Z forward), `input.png` and `meta.json`.
-
-## API
-
-| Route | |
-|---|---|
-| `GET /models` · `POST /models/unload?name=` | models, load status, device · free GPU memory |
-| `GET /jobs/{id}` | a background job's stage, progress and result |
-| `POST /predict` | multipart `image`, `models` (repeatable), `force` → job |
-| `POST /video` | multipart `video`, `fps`, `max_frames`, `max_side`, `hud`, `geometry` → job |
-| `GET /runs` · `GET /runs/{id}` · `DELETE /runs/{id}` | run metadata · delete a run |
-| `POST /runs/{id}/recompute` | redo a run with the current version → job with its (possibly new) id |
-| `GET /runs/{id}/score` | a playground run's scores against its ground truth (`truth` form field on `/video` and `/predict`) |
-| `GET /runs/{id}/frames/{i}.jpg` | a scene's sampled frames |
-| `POST /runs/{id}/minecraft/build` | build the blocks → job with the summary |
-| `GET /runs/{id}/minecraft.json` | build summary: size, block count, tiles, FOV, pitch, paste offset |
-| `GET /runs/{id}/minecraft.schem` | Sponge v2 schematic (builds up to one tile) |
-| `POST /runs/{id}/minecraft/tiles` | write the tiles zip → job with its URL |
-| `GET /runs/{id}/minecraft.bin` | block preview for the viewer |
-| `GET /runs/{id}/points.bin?stride=` | point cloud for the viewer (≤ 500k points) |
-| `GET /runs/{id}/maps/{kind}.png` | depth, confidence, normals, discontinuity, curl, residual |
-| `GET /runs/{id}/analysis` · `GET /runs/{id}/field/{curl,residual}.bin` | integrability, reprojection, tears · per-point fields |
-| `POST /runs/{id}/offaxis` | ±5/15/30° renders → job |
-
-Minecraft routes take `mode` (`auto` · `meters` · `fit`), `value` and, for scenes, `frame`.
-
-## Development
-
-```bash
-uv run pytest                                            # model tests download weights on first run
-uv run python tools/readme_figure.py <run id> [kblocks]  # regenerate docs/minecraft.jpg
-uv run python tools/minecraft_palette.py <minecraft.jar> # re-measure the block palette
+uv run pytest                                                 # model tests download weights on first run
+uv run python tools/readme_media.py triptych <run> <out.jpg>  # README pictures: triptych, orbit, walk
+uv run python tools/minecraft_palette.py <minecraft.jar>      # re-measure the block palette
 ```
 
 ## License
 
-The code is [MIT](LICENSE). Model weights keep their own licences (see [Models](#models)); some,
-such as VGGT-1B and Depth Anything Base/Large, are non-commercial.
+The code is [MIT](LICENSE). Model weights keep their own licences (see
+[docs/builds.md](docs/builds.md#models)); some, such as VGGT-1B and Depth Anything Base/Large, are
+non-commercial.
 
 Minecraft is a trademark of Mojang Studios. BlockShot is not affiliated with Mojang or Microsoft.
