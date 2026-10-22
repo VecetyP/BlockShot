@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -134,6 +135,19 @@ def list_runs() -> list[dict]:
 
 
 MAX_POINTS = 500_000
+
+
+def delete_run(rid: str) -> None:
+    """Removes a run (image prediction or video scene) from disk and from the in-memory caches."""
+    d = (RUNS / rid).resolve()
+    if d.parent != RUNS.resolve() or not (d / "meta.json").exists():
+        raise FileNotFoundError(rid)
+    with _build_lock:  # not while a build of it is being made
+        for k in [k for k in _builds if k[0] == rid]:
+            del _builds[k]
+        _scenes.pop(rid, None)
+        _scene_clouds.pop(rid, None)
+        shutil.rmtree(d)
 
 
 def has_depth(meta: dict) -> bool:

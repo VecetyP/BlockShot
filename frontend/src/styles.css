@@ -120,6 +120,14 @@ kbd {
 .history span { display: grid; min-width: 0; }
 .history .name, .history small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history li.active .name { color: var(--accent); }
+/* Delete: only shown on hover (or keyboard focus), so the list stays calm. */
+.history button.delete {
+  flex: none; padding: 6px; margin-right: 4px; color: var(--muted); border-radius: var(--radius);
+  opacity: 0; transition: opacity 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.history li:hover button.delete, .history button.delete:focus-visible { opacity: 1; }
+.history button.delete:hover:not(:disabled) { color: var(--danger); background: var(--panel-hover); }
+@media (hover: none) { .history button.delete { opacity: 1; } }
 
 main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .toolbar {

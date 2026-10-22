@@ -473,6 +473,17 @@ export default function App() {
     }
   };
 
+  const remove = async (r: api.RunMeta) => {
+    if (!window.confirm(`Delete "${r.source ?? r.id}" (${api.isScene(r) ? "video scene" : modelLabel(r)})? This removes it from disk.`)) return;
+    try {
+      await api.deleteRun(r.id);
+      setSelected((s) => s.filter((x) => x !== r.id));
+      await refreshRuns();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const toggle = (id: string, on: boolean) =>
     setSelected((s) => (on ? [...s.filter((x) => x !== id), id].slice(-MAX_PANELS) : s.filter((x) => x !== id)));
   const selectedRuns = selected.map((id) => runs.find((r) => r.id === id)).filter((r): r is api.RunMeta => !!r);
@@ -558,6 +569,9 @@ export default function App() {
                     {api.isScene(r) ? <span className="badge">video · {r.frames} frames</span> : modelLabel(r)} · {r.created.replace("T", " ")}
                   </small>
                 </span>
+              </button>
+              <button className="icon delete" aria-label={`Delete ${r.source ?? r.id}`} title="Delete" onClick={() => remove(r)}>
+                <Icon d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
               </button>
             </li>
           ))}

@@ -36,6 +36,7 @@ const json = async <T,>(r: Response): Promise<T> => {
 export const getModels = () => fetch(`${API}/models`).then(json<ModelInfo[]>);
 export const getRuns = () => fetch(`${API}/runs`).then(json<RunMeta[]>);
 export const getRun = (id: string) => fetch(`${API}/runs/${id}`).then(json<RunMeta>);
+export const deleteRun = (id: string) => fetch(`${API}/runs/${id}`, { method: "DELETE" }).then(json<unknown>);
 
 /** A background job on the server (backend/jobs.py). total 0 = no measurable progress in this stage. */
 export type JobState = {

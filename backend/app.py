@@ -119,6 +119,15 @@ def run(rid: str):
     return store.load_meta(rid)
 
 
+@app.delete("/runs/{rid}")
+def delete_run(rid: str):
+    try:
+        store.delete_run(rid)
+    except FileNotFoundError:
+        raise HTTPException(404, f"no run {rid}")
+    return {}
+
+
 @app.get("/runs/{rid}/points.bin")
 def points(rid: str, stride: int | None = None):
     _run_or_404(rid)
