@@ -58,8 +58,8 @@ Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
 
 1. Put the file in `.minecraft/config/worldedit/schematics/` (singleplayer mod) or the server's
    `plugins/WorldEdit/schematics/`.
-2. Stand where the picture should be seen from, and face south at the pitch on the card:
-   `/tp @s ~ ~ ~ 0 <pitch>`.
+2. Stand where the picture should be seen from, and turn to the yaw and pitch on the card:
+   `/tp @s ~ ~ ~ <yaw> <pitch>`.
 3. `//schem load <file name>`, then `//paste`. The paste is offset so the image's camera lands at
    your eyes. For tiles, load and paste each one without moving: every tile carries its own offset
    from the same standing spot, so they assemble around you.
@@ -115,8 +115,9 @@ treat real-size builds from video as approximate.
 
 1. **Point cloud.** The chosen model predicts a 3D point for every pixel, in the camera's frame.
 2. **Axes.** The cloud is turned into Minecraft's axes with the camera facing south (+z), so the
-   image's right side goes west. Video scenes use the chosen frame's camera, with "up" averaged over
-   all frames.
+   image's right side goes west. Video scenes line the grid up with the first frame, with "up"
+   averaged over all frames, and are built once: choosing another frame only changes where you
+   stand, your yaw and pitch, and the FOV.
 3. **Blocks.** The surface between neighbouring pixels is filled in, except across depth jumps, and
    snapped to a grid whose spacing comes from the block-size setting. The outermost 0.5% of points on
    each axis are ignored, so stray points don't shrink the build, and blocks within 4 of the eye are

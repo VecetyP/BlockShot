@@ -289,15 +289,20 @@ def _rgb(rid: str) -> np.ndarray:
     return np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
 
 
-_builds: dict = {}  # (rid, mode, value) -> Build; a handful of recent builds
+_builds: dict = {}  # (rid, mode, value) -> Build; a handful of recent builds (scenes: before view_from)
 _build_lock = threading.Lock()  # one build at a time, and never the same build twice
 MAX_CACHED_BUILDS = 4
 
 
 def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> minecraft.Build:
-    """Image runs: viewed from the input camera. Scenes: from frame `frame`'s camera, with "up"
-    averaged over all frames so floors come out level."""
-    key = (rid, mode, float(value), frame)
+    """Image runs: viewed from the input camera. Scenes: built once, then viewed from frame
+    `frame`'s camera (only the standing spot, yaw, pitch and FOV change between frames)."""
+    b = _base_build(rid, mode, value, progress)
+    return _scene_view(rid, b, frame) if is_scene(rid) else b
+
+
+def _base_build(rid: str, mode: str, value: float, progress=None) -> minecraft.Build:
+    key = (rid, mode, float(value))
     if key in _builds:
         return _builds[key]
     say = progress or (lambda *a, **k: None)
@@ -308,7 +313,7 @@ def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int
         if key not in _builds:
             say("reading points")
             if is_scene(rid):
-                b = _scene_build(rid, mode, value, frame, say)
+                b = _scene_build(rid, mode, value, say)
             else:
                 a = load_arrays(rid)
                 b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say)
@@ -337,6 +342,7 @@ def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int 
         "tiles": len(np.unique(b.ijk[:, [0, 2]] // TILE, axis=0)),
         "fov_deg": round(b.fov_deg, 1),
         "pitch_deg": round(b.pitch_deg, 1),
+        "yaw_deg": round(b.yaw_deg, 1),
         "offset": b.offset,
         "preview_lod": lod,
         "data_version": minecraft.DATA_VERSION,
@@ -492,11 +498,23 @@ def scene_points(rid: str) -> tuple[np.ndarray, np.ndarray]:
     return _scene_clouds[rid]
 
 
-def _scene_build(rid: str, mode: str, value: float, frame: int, say) -> minecraft.Build:
-    sc = load_scene(rid)
+def _scene_pose(sc: dict, frame: int) -> tuple[minecraft.Pose, float]:
+    """Frame `frame`'s camera, with "up" averaged over all frames so floors come out level; and its
+    vertical FOV."""
     c2w = sc["c2w"].astype(np.float64)
     frame = int(np.clip(frame, 0, len(c2w) - 1))
-    up = -c2w[:, :3, 1].mean(0)  # cameras' up (-y), averaged: level floors
-    pose = minecraft.Pose(c2w[frame, :3, 3], c2w[frame, :3, 2], up)
+    up = -c2w[:, :3, 1].mean(0)  # cameras' up (-y), averaged
     fov = math.degrees(2 * math.atan(sc["depth"].shape[1] / 2 / float(sc["K"][frame][1, 1])))
-    return minecraft.build_from_grids(_scene_grids(sc), pose, fov, mode, value, progress=say)
+    return minecraft.Pose(c2w[frame, :3, 3], c2w[frame, :3, 2], up), fov
+
+
+def _scene_build(rid: str, mode: str, value: float, say) -> minecraft.Build:
+    """The scene's blocks, with the grid lined up with frame 0 (any frame works: view_from moves the
+    viewer). The space around the eye is cleared per frame by view_from."""
+    sc = load_scene(rid)
+    pose, fov = _scene_pose(sc, 0)
+    return minecraft.build_from_grids(_scene_grids(sc), pose, fov, mode, value, progress=say, clear=False)
+
+
+def _scene_view(rid: str, b: minecraft.Build, frame: int) -> minecraft.Build:
+    return minecraft.view_from(b, *_scene_pose(load_scene(rid), frame))

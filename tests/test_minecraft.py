@@ -153,3 +153,27 @@ def test_tilted_camera_still_gives_level_floors_and_reports_pitch():
     b = mc.build(floor, np.full((len(floor), 3), 90, np.uint8), pose, 60, "meters", 0.25)
     assert len(np.unique(b.ijk[:, 1])) == 1  # one level layer
     assert math.isclose(b.pitch_deg, 20, abs_tol=1e-6)
+
+
+def test_view_from_another_camera_matches_building_from_it():
+    # A box room seen from two cameras: one facing +z, one turned 90° to face +x (both level).
+    rng = np.random.default_rng(1)
+    pts = rng.uniform(-4, 4, (40_000, 3))
+    pts[np.arange(len(pts)), rng.integers(0, 3, len(pts))] = rng.choice([-4.0, 4.0], len(pts))  # on the walls
+    rgb = np.full((len(pts), 3), 120, np.uint8)
+    up = np.array([0.0, -1.0, 0.0])
+    a = mc.Pose(np.zeros(3), np.array([0.0, 0, 1]), up)
+    turned = mc.Pose(np.array([1.0, 0.5, -1.0]), np.array([1.0, 0, 0]), up)
+    base = mc.build(pts, rgb, a, 60, "meters", 0.25)
+    v = mc.view_from(base, turned, 50)
+    # Facing +x in camera coordinates (y down) is facing west in Minecraft (east = up x south): yaw 90.
+    assert math.isclose(v.yaw_deg, 90, abs_tol=1e-6) and math.isclose(v.pitch_deg, 0, abs_tol=1e-6) and v.fov_deg == 50
+    # Pasting from the eye: block centre + offset - EYE is the block's position relative to the eye;
+    # turning that into cloud coordinates must give back the block's own position.
+    B, _ = mc._basis(base.pose)
+    rel = (v.ijk + 0.5 + np.array(v.offset) - mc.EYE) * base.block_size  # Minecraft axes, from the eye
+    world = rel @ B.T + turned.position
+    centre = (base.lo + (v.ijk + 0.5) * base.block_size) @ B.T + base.pose.position
+    assert np.abs(world - centre).max() < base.block_size  # within the offset's rounding
+    # The space around the new eye is cleared.
+    assert (np.linalg.norm(v.ijk + 0.5 - v.camera, axis=1) > mc.CLEAR_BLOCKS).all()

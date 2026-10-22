@@ -244,6 +244,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
   const [w, h, l] = info.dims;
   const fov = Math.round(info.fov_deg);
   const pitch = Math.round(info.pitch_deg);
+  const yaw = Math.round(info.yaw_deg);
   const size = info.block_size_unit === "m" ? `${info.block_size < 1 ? `${Math.round(info.block_size * 100)} cm` : `${info.block_size.toFixed(2)} m`}` : `${info.block_size.toPrecision(2)} units`;
   return (
     <div className="mc-card">
@@ -265,7 +266,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
         <summary>How to line it up in game (1.20+)</summary>
         <ol>
           <li>Put the {info.tiles > 1 ? "tiles" : "file"} in <code>.minecraft/config/worldedit/schematics/</code> (WorldEdit mod) or the server's <code>plugins/WorldEdit/schematics/</code>.</li>
-          <li>Stand where {api.isScene(run) ? `frame ${frame} was filmed` : "the picture was taken"} from, facing south: <code>/tp @s ~ ~ ~ 0 {pitch}</code></li>
+          <li>Stand where {api.isScene(run) ? `frame ${frame} was filmed` : "the picture was taken"} from, looking the same way: <code>/tp @s ~ ~ ~ {yaw} {pitch}</code></li>
           <li>
             <code>//schem load &lt;name&gt;</code>, then <code>//paste</code>
             {info.tiles > 1 ? " for every tile, without moving in between (the zip has the list)." : "."} The picture's camera lands at your eyes.

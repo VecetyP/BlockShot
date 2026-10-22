@@ -161,6 +161,7 @@ export type MinecraftInfo = {
   tiles: number;
   fov_deg: number; // vertical FOV that makes the build line up with the image
   pitch_deg: number; // in-game pitch to look along the camera
+  yaw_deg: number; // in-game yaw (0 = south); scene frames can face any way
   offset: [number, number, number];
   preview_lod: number; // the 3D preview merges this many blocks per side
   data_version: number;

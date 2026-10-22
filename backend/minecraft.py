@@ -11,7 +11,7 @@ import json
 import math
 import struct
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -157,7 +157,8 @@ class Build:
     fov_deg: float  # vertical field of view to set in game
     pitch_deg: float  # in-game pitch to look along the camera
     budget_limited: bool = False  # the block budget made blocks bigger than asked
-    pose: Pose = field(default_factory=lambda: IMAGE_POSE)
+    pose: Pose = field(default_factory=lambda: IMAGE_POSE)  # sets the grid's axes; the viewer unless view_from moved it
+    yaw_deg: float = 0.0  # in-game yaw to look along the camera (0 = south)
 
 
 def _keys(p, lo, s, dims):
@@ -177,12 +178,15 @@ def _voxelize(p, lin, lo, s, dims):
     return ijk, mean
 
 
-def _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, limited=False, target=None) -> Build:
+def _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, limited=False, target=None, clear=True) -> Build:
     """`target`: "auto" builds aim at this many blocks; if the sizing passes undershot the size,
-    blocks are enlarged here (the samples are dense enough for bigger blocks, not smaller)."""
+    blocks are enlarged here (the samples are dense enough for bigger blocks, not smaller).
+    `clear`: empty the space around the viewer's eyes (view_from does it later otherwise)."""
     # Inside the bounds, and not in the space around the viewer's eyes: anything that close (a
     # third-person character, a railing) would become giant blocks covering the view.
-    keep = ((p >= lo) & (p <= hi)).all(1) & (np.linalg.norm(p, axis=1) > CLEAR_BLOCKS * s)
+    keep = ((p >= lo) & (p <= hi)).all(1)
+    if clear:
+        keep &= np.linalg.norm(p, axis=1) > CLEAR_BLOCKS * s
     p, lin = p[keep], _linear(np.asarray(rgb)[keep].astype(np.float64))
     for _ in range(6):
         progress("placing blocks")
@@ -234,7 +238,7 @@ def _size_for_count(samples_at, lo, hi, target: float, progress=_quiet) -> float
 
 
 def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", value: float = 300,
-                     budget: int = DEFAULT_BUDGET, progress=_quiet) -> Build:
+                     budget: int = DEFAULT_BUDGET, progress=_quiet, clear: bool = True) -> Build:
     """Block build from one or more image grids [(points (H, W, 3), rgb (H, W, 3), mask, camera
     centre)], all in the same cloud frame, viewed from `pose`. Surfaces between pixels are filled.
 
@@ -265,7 +269,23 @@ def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", valu
         s = float(value) if mode == "meters" else float((hi - lo).max()) / value
     progress("filling surfaces")
     p, rgb = samples(s, stage="filling surfaces")
-    return _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, target=value * 1000 if mode == "auto" else None)
+    return _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, target=value * 1000 if mode == "auto" else None, clear=clear)
+
+
+def view_from(b: Build, pose: Pose, fov_deg: float) -> Build:
+    """The same blocks, seen from another camera (e.g. another frame of a video scene): where to
+    stand (paste offset), yaw, pitch and FOV, with the blocks around that eye cleared. The grid keeps
+    its axes, so this costs milliseconds instead of a rebuild."""
+    B, _ = _basis(b.pose)
+    eye = (np.asarray(pose.position, float) - b.pose.position) @ B  # Minecraft axes of the build
+    camera = (eye - b.lo) / b.block_size
+    keep = np.linalg.norm(b.ijk + 0.5 - camera, axis=1) > CLEAR_BLOCKS
+    f = (pose.forward / np.linalg.norm(pose.forward)) @ B
+    yaw = math.degrees(math.atan2(-f[0], f[2]))  # Minecraft: yaw 0 looks south (+z), 90 west (-x)
+    pitch = -math.degrees(math.asin(float(np.clip(f[1], -1, 1))))
+    offset = tuple(int(v) for v in np.round(EYE - camera))
+    return replace(b, ijk=b.ijk[keep], block=b.block[keep], camera=camera, offset=offset, fov_deg=fov_deg,
+                   pitch_deg=pitch, yaw_deg=yaw)
 
 
 def build_from_image(points, rgb, mask, K, mode="auto", value=300, budget=DEFAULT_BUDGET, progress=_quiet) -> Build:
@@ -379,7 +399,7 @@ def tiles_zip(b: Build, base: str, size: int = 128, progress=_quiet) -> bytes:
     lines = [
         f"BlockShot build: {len(parts)} tiles, {b.dims[0]} x {b.dims[1]} x {b.dims[2]} blocks.",
         "Copy the .schem files into WorldEdit's schematics folder. Then stand where the picture",
-        f"should be seen from, look along it, and DO NOT MOVE while pasting: /tp @s ~ ~ ~ 0 {b.pitch_deg:.0f}",
+        f"should be seen from, look along it, and DO NOT MOVE while pasting: /tp @s ~ ~ ~ {b.yaw_deg:.0f} {b.pitch_deg:.0f}",
         "",
     ]
     buf = io.BytesIO()
