@@ -7,6 +7,9 @@ cloud, BlockShot turns that cloud into blocks, and you get a WorldEdit schematic
 where the camera was, and the build lines up with the original image. Walk away, and it falls apart
 into the façade it really is.
 
+Or drop in a **video**: a walk through a room, or a screen recording of a game. BlockShot aligns the
+frames into one scene and builds the whole space, viewable from any frame.
+
 ![A Minecraft screenshot, its block build seen from the original camera, and the same build from 30° to the side](docs/minecraft.jpg)
 
 *Left: the input screenshot. Middle: the generated build, seen from the input camera. Right: the same
@@ -36,24 +39,75 @@ Model weights download from Hugging Face on first use.
 
 ## Make a build
 
-1. Drop an image on the drop zone, keep **moge** ticked (recommended), and press **Run**.
-2. In the **Minecraft build** bar under the 3D view, pick a **Size**: blocks along the build's
-   longest side, 32–256.
+1. Drop an image on the drop zone, keep **moge** ticked (recommended), and press **Run**. Anything
+   slow (loading weights, predicting, building, exporting) shows a progress bar.
+2. In the **Minecraft build** bar under the 3D view, choose how big a block is:
+   - **Auto** (default): about *N* thousand blocks in total, 50k–4M. Detail follows the scene, so a
+     city and a room both get a few hundred thousand blocks.
+   - **Real size**: one block = *x* metres. Metric models (MoGe, video scenes) only.
+   - **Fit longest side**: the longest side is *N* blocks.
+
+   A budget of 4M blocks enlarges the blocks, with a warning, if a setting would go past it.
 3. Tick **Show as blocks** to preview the build in 3D, and press **Snap to input camera** to see it
-   from the spot where it matches.
-4. Press **Download .schem** on the run's card.
+   from the spot where it matches. Previews above 400k blocks merge blocks into bigger cubes;
+   downloads are always full detail.
+4. Press **Download .schem** on the run's card. Builds wider or longer than 128 blocks come as a
+   **zip of 128 × 128 tiles** instead, with a `paste-commands.txt`.
 
 Then, in Minecraft with [WorldEdit](https://enginehub.org/worldedit):
 
 1. Put the file in `.minecraft/config/worldedit/schematics/` (singleplayer mod) or the server's
    `plugins/WorldEdit/schematics/`.
-2. Stand where the picture should be seen from, and face south: `/tp @s ~ ~ ~ 0 0`.
+2. Stand where the picture should be seen from, and face south at the pitch on the card:
+   `/tp @s ~ ~ ~ 0 <pitch>`.
 3. `//schem load <file name>`, then `//paste`. The paste is offset so the image's camera lands at
-   your eyes.
+   your eyes. For tiles, load and paste each one without moving: every tile carries its own offset
+   from the same standing spot, so they assemble around you.
 4. Set **Options → FOV** to the number on the card (the camera's vertical field of view), turn
    **FOV Effects** off, and press **F1** to hide the HUD.
 
-Schematics use Minecraft 1.16.5 block data and load in 1.16 and every newer version.
+Schematics use Minecraft 1.20.1 block data (DataVersion 3465) and load in 1.20 and newer. A
+build taller than 384 blocks (the world's build height) gets a warning.
+
+## From a video
+
+Drop an `mp4`, `mov` or `webm` instead of an image. The options:
+
+- **Frames/s** (default 2) and **Max frames** (default 60): how densely the clip is sampled.
+  Near-duplicate frames (a camera standing still) are dropped.
+- **Geometry:** *MoGe depth* (best, in metres) or *VGGT depth* (faster).
+- **Ignore a static game HUD** (on): pixels that stay still while the picture moves, such as a
+  crosshair, hotbar or minimap, are left out of the scene.
+
+The result is a **scene**: one point cloud from all frames, shown with a **View from frame** slider
+and a strip of the sampled frames. Click a frame to view the scene, and its build, from that frame's
+camera. The Minecraft build is seen from the chosen frame, with floors levelled from the average
+camera "up". Stand there in game the same way as for an image.
+
+How it works (`backend/video.py`): **VGGT for where the camera was, MoGe for what it saw.**
+
+1. VGGT reads all frames in one pass (up to 96; longer clips go in overlapping chunks of 64, joined
+   with a similarity fit on the shared frames). It gives every frame's camera pose and depth in one
+   frame of reference.
+2. MoGe predicts each frame's depth in metres. Each frame is scaled to agree with VGGT's depth, then
+   the whole scene is scaled back to MoGe's metres.
+3. Each frame's pixels are placed with its VGGT pose. Builds fill the surface between neighbouring
+   pixels of each frame, so close walls don't come out as sparse dots.
+
+Measured on an RTX 3080 Laptop (16 GB) with a synthetic 10 s room walkthrough rendered from known
+camera poses (20 frames at 640 × 360):
+
+| | |
+|---|---|
+| Total time | 51 s: poses 15 s, depth 34 s |
+| Camera rotation error | 0.7° (median) |
+| Camera position error | 2.8 cm (RMS, after aligning scale) |
+| Surface error | 24–28 cm (median) |
+| VGGT, 64 frames in one pass | 26 s, 9.8 GB peak VRAM |
+
+**Limits.** Fast motion, motion blur and blank walls can throw the poses off. Keep the camera moving
+slowly, with each frame overlapping the last. MoGe's metres were 1.56× off on the synthetic room, so
+treat real-size builds from video as approximate.
 
 ## How a build is made
 
@@ -61,16 +115,21 @@ Schematics use Minecraft 1.16.5 block data and load in 1.16 and every newer vers
 
 1. **Point cloud.** The chosen model predicts a 3D point for every pixel, in the camera's frame.
 2. **Axes.** The cloud is turned into Minecraft's axes with the camera facing south (+z), so the
-   image's right side goes west.
-3. **Blocks.** Points are snapped to a grid sized so the longest side has *Size* blocks. The
-   outermost 0.5% of points on each axis are ignored, so stray points don't shrink the build.
+   image's right side goes west. Video scenes use the chosen frame's camera, with "up" averaged over
+   all frames.
+3. **Blocks.** The surface between neighbouring pixels is filled in, except across depth jumps, and
+   snapped to a grid whose spacing comes from the block-size setting. The outermost 0.5% of points on
+   each axis are ignored, so stray points don't shrink the build, and blocks within 4 of the eye are
+   dropped so they don't fill the view in game.
 4. **Colours.** Each block's colour is the mean of its points in linear light. The block placed is
    the palette entry closest in CIELAB, a perceptual colour space.
 5. **Schematic.** A Sponge v2 `.schem` with WorldEdit's paste offset set from the camera position,
-   and the vertical FOV from the model's estimated camera.
+   and the vertical FOV from the model's estimated camera. Tiles each carry the global offset plus
+   their own origin.
 
-The palette (`backend/minecraft_palette.json`) holds 107 blocks: all concrete, wool, terracotta and
-planks, plus stones, bricks, storage blocks and others that look the same on every face and don't
+The palette (`backend/minecraft_palette.json`) holds 153 blocks from 1.20.1: all concrete, wool,
+terracotta and planks, plus deepslate, tuff, mud bricks, waxed copper, stones, bricks, storage blocks
+and others that look the same on every face and don't
 fall, glow, or let light through. Each entry is the mean colour of the block's texture, measured from
 a Minecraft jar by `tools/minecraft_palette.py`. Only those numbers are in this repo, no game files.
 
@@ -142,21 +201,28 @@ Each run is cached in `runs/<image sha>_<model>_<version hash>/` as `prediction.
 | Route | |
 |---|---|
 | `GET /models` · `POST /models/unload?name=` | models, load status, device · free GPU memory |
-| `POST /predict` | multipart `image`, `models` (repeatable), `force` |
+| `GET /jobs/{id}` | a background job's stage, progress and result |
+| `POST /predict` | multipart `image`, `models` (repeatable), `force` → job |
+| `POST /video` | multipart `video`, `fps`, `max_frames`, `max_side`, `hud`, `geometry` → job |
 | `GET /runs` · `GET /runs/{id}` | run metadata |
-| `GET /runs/{id}/minecraft.json?size=` | build summary: size, block count, FOV, paste offset |
-| `GET /runs/{id}/minecraft.schem?size=` | Sponge v2 schematic |
-| `GET /runs/{id}/minecraft.bin?size=` | block preview for the viewer |
+| `GET /runs/{id}/frames/{i}.jpg` | a scene's sampled frames |
+| `POST /runs/{id}/minecraft/build` | build the blocks → job with the summary |
+| `GET /runs/{id}/minecraft.json` | build summary: size, block count, tiles, FOV, pitch, paste offset |
+| `GET /runs/{id}/minecraft.schem` | Sponge v2 schematic (builds up to one tile) |
+| `POST /runs/{id}/minecraft/tiles` | write the tiles zip → job with its URL |
+| `GET /runs/{id}/minecraft.bin` | block preview for the viewer |
 | `GET /runs/{id}/points.bin?stride=` | point cloud for the viewer (≤ 500k points) |
 | `GET /runs/{id}/maps/{kind}.png` | depth, confidence, normals, discontinuity, curl, residual |
 | `GET /runs/{id}/analysis` · `GET /runs/{id}/field/{curl,residual}.bin` | integrability, reprojection, tears · per-point fields |
-| `POST /runs/{id}/offaxis` | ±5/15/30° renders |
+| `POST /runs/{id}/offaxis` | ±5/15/30° renders → job |
+
+Minecraft routes take `mode` (`auto` · `meters` · `fit`), `value` and, for scenes, `frame`.
 
 ## Development
 
 ```bash
 uv run pytest                                            # model tests download weights on first run
-uv run python tools/readme_figure.py <run id> [size]     # regenerate docs/minecraft.jpg
+uv run python tools/readme_figure.py <run id> [kblocks]  # regenerate docs/minecraft.jpg
 uv run python tools/minecraft_palette.py <minecraft.jar> # re-measure the block palette
 ```
 
