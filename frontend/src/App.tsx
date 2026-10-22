@@ -6,6 +6,14 @@ import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
 const MAX_PANELS = 4;
 const RECOMMENDED_MODEL = "moge"; // the best-looking builds in practice; listed first and picked by default
 const modelLabel = (r: api.RunMeta) => String(r.model).split("/").pop();
+/** Short model name from the run id (`<sha>_<model>_<version>`): "moge", "depth anything", ... */
+const shortModel = (r: api.RunMeta) => r.id.split("_").slice(1, -1).join(" ");
+const runName = (r: api.RunMeta) => r.source ?? r.id;
+/** Long file names differ at the end (camera timestamps), so shorten them in the middle. */
+const shortName = (name: string, max = 24) => (name.length <= max ? name : `${name.slice(0, max - 13)}…${name.slice(-12)}`);
+const when = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const runDetail = (r: api.RunMeta) => (api.isScene(r) ? `video · ${r.frames} frames` : shortModel(r));
 
 const DEFAULT_NAV: NavSettings = { move: 0.5, rotate: 1, zoom: 1 };
 const NAV_KEY = "nav-settings";
@@ -83,6 +91,13 @@ function Panel(props: {
     (props.mode === "confidence" && !cloud?.confidence) || (wantsField && field?.kind === props.mode && !field.values);
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
+  const stats = analysis
+    ? [
+        analysis.reprojection_px !== null && `reproj ${analysis.reprojection_px.toFixed(3)} px`,
+        integ?.native && `native residual ${pct(integ.native.residual_fraction)}`,
+        integ?.derived && `depth residual ${pct(integ.derived.residual_fraction)}`,
+      ].filter(Boolean).join(" · ")
+    : "";
   const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
   const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.frame}`;
   useEffect(() => {
@@ -99,25 +114,24 @@ function Panel(props: {
     <div className="panel">
       {meta && (
         <div className="panel-head">
-          <span>
-            {props.titled && <>{modelLabel(meta)} <small>{meta.scale_kind}</small> </>}
-            {analysis && (
-              <small className="stats">
-                {[
-                  analysis.reprojection_px !== null && `reproj ${analysis.reprojection_px.toFixed(3)} px`,
-                  integ?.native && `native residual ${pct(integ.native.residual_fraction)}`,
-                  integ?.derived && `depth residual ${pct(integ.derived.residual_fraction)}`,
-                ].filter(Boolean).join(" · ")}
-              </small>
-            )}
-            {unavailable && <small className="warn"> · no {props.mode} for this model</small>}
-          </span>
-          {props.titled && <button onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>}
-        </div>
-      )}
-      {meta && api.isScene(meta) && (
-        <div className="panel-head">
-          <Slider label="View from frame" min={0} max={(meta.frames ?? 1) - 1} step={1} value={props.frame} unit={` / ${(meta.frames ?? 1) - 1}`} onChange={props.onFrame} />
+          {(props.titled || stats || unavailable) && (
+            <div className="chip info">
+              {props.titled && (
+                <span className="chip-title">
+                  <strong title={runName(meta)}>{api.isScene(meta) ? shortName(runName(meta), 32) : modelLabel(meta)}</strong>
+                  <small>{meta.scale_kind}</small>
+                </span>
+              )}
+              {stats && <small className="stats">{stats}</small>}
+              {unavailable && <small className="warn">No {props.mode} for this model</small>}
+            </div>
+          )}
+          {api.isScene(meta) && (
+            <div className="chip">
+              <Slider label="View from frame" min={0} max={(meta.frames ?? 1) - 1} step={1} value={props.frame} unit={` / ${(meta.frames ?? 1) - 1}`} onChange={props.onFrame} />
+            </div>
+          )}
+          {props.titled && <button className="chip snap" onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>}
         </div>
       )}
       {cloud && meta ? (
@@ -141,18 +155,48 @@ function Panel(props: {
   );
 }
 
+/** A settings menu under a button; closes on Escape or a click outside it. */
+function Popover({ label, children }: { label: string; children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const away = (e: Event) => {
+      const d = ref.current;
+      if (d?.open && !d.contains(e.target as Node)) d.open = false;
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && ref.current?.open) ref.current.open = false;
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, []);
+  return (
+    <details className="popover" ref={ref}>
+      <summary>
+        <Icon d="M4 6h9m4 0h3M4 12h3m4 0h9M4 18h11m4 0h1M15 4v4M9 10v4M17 16v4" />
+        {label}
+      </summary>
+      <div className="popover-body">{children}</div>
+    </details>
+  );
+}
+
 type LightboxItem = { src: string; caption: string };
 
 /** Progress of a background job: stage, percent when measurable, elapsed time. */
 function ProgressBar({ job }: { job: api.JobState }) {
-  const pct = job.total > 0 ? Math.min(100, (100 * job.done) / job.total) : null;
+  // A one-step stage ("0 of 1", e.g. one VGGT pass) has nothing to count: show it as working, not stuck at 0%.
+  const pct = job.total > 1 ? Math.min(100, (100 * job.done) / job.total) : null;
   return (
     <div className="progress" role="progressbar" aria-label={job.stage} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
       <div className="progress-track">
         <div className="progress-fill" style={{ transform: `scaleX(${(pct ?? 100) / 100})` }} data-indeterminate={pct === null || undefined} />
       </div>
       <div className="progress-text">
-        <span>{job.stage}{job.message ? ` · ${job.message}` : ""}</span>
+        <span title={`${job.stage}${job.message ? ` · ${job.message}` : ""}`}>{job.stage}{job.message ? ` · ${job.message}` : ""}</span>
         <span>{pct !== null && `${Math.round(pct)}% · `}{Math.round(job.elapsed)}s</span>
       </div>
     </div>
@@ -239,8 +283,14 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
       .catch((e) => setError(String(e)))
       .finally(() => setExporting(null));
   };
-  if (building) return <div className="mc-card"><strong>Minecraft build</strong><ProgressBar job={building} /></div>;
-  if (error || !info) return <div className="mc-card"><strong>Minecraft build</strong><small className="error">{error ?? "No build"}</small></div>;
+  const head = (
+    <div className="mc-head">
+      <strong title={runName(run)}>{shortName(runName(run), 32)}</strong>
+      <small>{api.isScene(run) ? `frame ${frame}` : shortModel(run)}</small>
+    </div>
+  );
+  if (building) return <div className="mc-card">{head}<ProgressBar job={building} /></div>;
+  if (error || !info) return <div className="mc-card">{head}<small className="error">{error ?? "No build"}</small></div>;
   const [w, h, l] = info.dims;
   const fov = Math.round(info.fov_deg);
   const pitch = Math.round(info.pitch_deg);
@@ -248,7 +298,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
   const size = info.block_size_unit === "m" ? `${info.block_size < 1 ? `${Math.round(info.block_size * 100)} cm` : `${info.block_size.toFixed(2)} m`}` : `${info.block_size.toPrecision(2)} units`;
   return (
     <div className="mc-card">
-      <strong>Minecraft build</strong>
+      {head}
       <small>{w} × {h} × {l} blocks · {info.blocks.toLocaleString()} placed · 1 block = {size}</small>
       {info.budget_limited && <small className="warn">Blocks were enlarged to stay under the block budget.</small>}
       {info.too_tall && <small className="warn">Taller than Minecraft's 384-block build height: the top or bottom will be cut off.</small>}
@@ -428,6 +478,7 @@ export default function App() {
   const frameOf = (id: string) => frames[id] ?? 0;
   const setFrame = (id: string) => (i: number) => setFrames((f) => ({ ...f, [id]: i }));
   const [above, setAbove] = useState(false); // the next picture is a top-down map
+  const [reloads, setReloads] = useState(0); // bumped after a recompute: open panels load the new data
   const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
@@ -502,6 +553,7 @@ export default function App() {
     } finally {
       setRunning(null);
       await refreshRuns();
+      setReloads((k) => k + 1);
       if (done.length) setSelected(done);
     }
   };
@@ -534,15 +586,15 @@ export default function App() {
             <label className="slider">
               <span>Geometry</span>
               <select value={video.geometry} onChange={(e) => setVideo((v) => ({ ...v, geometry: e.target.value as api.VideoSettings["geometry"] }))}>
-                <option value="vggt">VGGT depth (frames agree, recommended)</option>
-                <option value="moge">MoGe detail (sharper, more ghosts)</option>
+                <option value="vggt">VGGT (recommended)</option>
+                <option value="moge">MoGe (sharper, can ghost)</option>
               </select>
             </label>
-            <label>
+            <label className="option">
               <input type="checkbox" checked={video.hud} onChange={(e) => setVideo((v) => ({ ...v, hud: e.target.checked }))} />
               <span>Ignore a static game HUD</span>
             </label>
-            <small>Move slowly and keep things in view between frames. Each frame takes about a second.</small>
+            <small className="note">Move slowly and keep things in view between frames. Each frame takes about a second.</small>
           </fieldset>
         ) : (
         <fieldset className="models">
@@ -564,9 +616,12 @@ export default function App() {
         </fieldset>
         )}
         {!isVideo && (
-          <label className="check" title="Tick for pictures that look (nearly) straight down, like a top-down map, so the ground becomes the floor. Angled and tilted shots are levelled automatically without it. Applies to the picture's runs, already made ones included.">
+          <label className="option" title="Angled and tilted shots are levelled automatically without it. Applies to the picture's runs, already made ones included.">
             <input type="checkbox" checked={above} onChange={(e) => setAbove(e.target.checked)} />
-            Top-down map (seen from straight above)
+            <span>
+              Top-down map
+              <small>The picture looks straight down at the ground</small>
+            </span>
           </label>
         )}
         {running ? (
@@ -598,10 +653,8 @@ export default function App() {
               <button onClick={() => setSelected([r.id])}>
                 <img src={api.inputUrl(r.id)} alt="" loading="lazy" decoding="async" />
                 <span>
-                  <span className="name" title={r.source ?? r.id}>{r.source ?? r.id}</span>
-                  <small>
-                    {api.isScene(r) ? <span className="badge">video · {r.frames} frames</span> : modelLabel(r)} · {r.created.replace("T", " ")}
-                  </small>
+                  <span className="name" title={runName(r)}>{shortName(runName(r))}</span>
+                  <small title={`${runDetail(r)} · ${r.created.replace("T", " ")}`}>{runDetail(r)} · {when(r.created)}</small>
                 </span>
               </button>
               <button className="icon delete" aria-label={`Delete ${r.source ?? r.id}`} title="Delete" onClick={() => remove(r)}>
@@ -628,34 +681,32 @@ export default function App() {
               </button>
             ))}
           </div>
-          <span className="divider" aria-hidden="true" />
-          <Slider label="Point size" min={1} max={8} step={0.5} value={pointSize} unit="px" onChange={setPointSize} />
-          <span className="divider" aria-hidden="true" />
-          <div className="group">
-            <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
-            <label className="check">
-              <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
-              Tears
-            </label>
-          </div>
-        </div>
-        <div className="toolbar nav" aria-label="Navigation">
-          <span className="hint" title="Click or hover a viewer first. In a comparison grid the panel under the mouse leads.">
-            Drag to look · <kbd>WASD</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up · scroll forward/back · <kbd>Shift</kbd> faster
+          <button onClick={() => setSnapKey((k) => k + 1)} disabled={!selected.length}>Snap to input camera</button>
+          <label className="check">
+            <input type="checkbox" checked={showTears} onChange={(e) => setShowTears(e.target.checked)} />
+            Tears
+          </label>
+          <span className="hint nav-hint" title="Click or hover a viewer first. In a comparison grid the panel under the mouse leads.">
+            Drag to look · <kbd>WASD</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up · scroll to move
           </span>
-          <div className="group sliders">
-            <Slider label="Move" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
-            <Slider label="Look" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
-            <Slider label="Scroll" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
-            <button className="quiet" onClick={() => setNav(DEFAULT_NAV)}>Reset</button>
-          </div>
+          <Popover label="View">
+            <Slider label="Point size" min={1} max={8} step={0.5} value={pointSize} unit="px" onChange={setPointSize} />
+            <Slider label="Move speed" min={0.05} max={3} step={0.05} value={nav.move} onChange={(move) => setNav({ move })} />
+            <Slider label="Look speed" min={0.1} max={3} step={0.1} value={nav.rotate} onChange={(rotate) => setNav({ rotate })} />
+            <Slider label="Scroll step" min={0.1} max={3} step={0.1} value={nav.zoom} onChange={(zoom) => setNav({ zoom })} />
+            <button className="quiet" onClick={() => setNav(DEFAULT_NAV)}>Reset speeds</button>
+            <p className="keys">
+              Drag to look around · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down/up ·
+              scroll forward/back · hold <kbd>Shift</kbd> to go faster. Click or hover a view first.
+            </p>
+          </Popover>
         </div>
 
         <div className={`stage grid-${selected.length}`}>
           {selected.length ? (
             selected.map((id) => (
               <Panel
-                key={`${id}:${runs.find((r) => r.id === id)?.above ?? false}`} // reload when its "up" changes
+                key={`${id}:${runs.find((r) => r.id === id)?.above ?? false}:${reloads}`} // reload when its "up" or data changes
                 id={id}
                 build={showBlocks ? build : undefined}
                 mode={mode}

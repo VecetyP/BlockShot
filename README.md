@@ -203,7 +203,7 @@ illusions and impossible figures. All of that is still here.
 - **Comparison grid.** Tick up to four runs in History. Moving in one panel moves all of them;
   poses are shared in units of each cloud's median depth, so metric and relative models stay aligned.
 - **Navigation.** First person: drag to look around from where you stand, scroll to move forward
-  or back. **W/A/S/D** fly, **Q/E** down/up, **Shift** faster, with sensitivity sliders for each.
+  or back. **W/A/S/D** fly, **Q/E** down/up, **Shift** faster, with speeds and point size under **View** in the toolbar.
 - **Colour modes:** RGB, depth, confidence, discontinuity, curl, residual.
 - **2D strip:** input, depth, confidence, normals and analysis maps. Click any image to enlarge it.
 - **Integrability** (`backend/analysis/integrability.py`): how much of a model's predicted normal
