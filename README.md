@@ -85,6 +85,9 @@ and a strip of the sampled frames. Click a frame to view the scene, and its buil
 camera. The Minecraft build is seen from the chosen frame, with floors levelled from the average
 camera "up". Stand there in game the same way as for an image.
 
+Scenes made by an older version can be redone: tick them in History and press **Recompute**. The
+video isn't kept, so they are redone from their stored frames; image runs rerun their model.
+
 How it works (`backend/video.py`):
 
 1. VGGT reads all frames in one pass, up to 40k image patches: 51 phone frames, landscape or
@@ -233,7 +236,8 @@ Each run is cached in `runs/<image sha>_<model>_<version hash>/` as `prediction.
 | `GET /jobs/{id}` | a background job's stage, progress and result |
 | `POST /predict` | multipart `image`, `models` (repeatable), `force` → job |
 | `POST /video` | multipart `video`, `fps`, `max_frames`, `max_side`, `hud`, `geometry` → job |
-| `GET /runs` · `GET /runs/{id}` | run metadata |
+| `GET /runs` · `GET /runs/{id}` · `DELETE /runs/{id}` | run metadata · delete a run |
+| `POST /runs/{id}/recompute` | redo a run with the current version → job with its (possibly new) id |
 | `GET /runs/{id}/frames/{i}.jpg` | a scene's sampled frames |
 | `POST /runs/{id}/minecraft/build` | build the blocks → job with the summary |
 | `GET /runs/{id}/minecraft.json` | build summary: size, block count, tiles, FOV, pitch, paste offset |

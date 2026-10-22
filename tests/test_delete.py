@@ -18,3 +18,21 @@ def test_delete_run_removes_it_and_refuses_anything_outside_runs(tmp_path, monke
         with pytest.raises(FileNotFoundError):
             store.delete_run(bad)
     assert (tmp_path / "meta.json").exists()
+
+
+def test_a_failed_recompute_puts_the_old_run_back(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    (runs / "abc_moge_1").mkdir(parents=True)
+    (runs / "abc_moge_1" / "meta.json").write_text(json.dumps({"id": "abc_moge_1", "image_sha256": "abc", "created": "2026-01-01T00:00:00"}))
+    (runs / "abc_moge_1" / "input.png").write_bytes(b"png")
+    monkeypatch.setattr(store, "RUNS", runs)
+
+    def boom(*a, **k):
+        assert store.list_runs() == []  # the run being redone is hidden meanwhile
+        raise RuntimeError("model crashed")
+
+    monkeypatch.setattr(store, "predict_cached", boom)
+    with pytest.raises(RuntimeError):
+        store.recompute("abc_moge_1")
+    assert (runs / "abc_moge_1" / "input.png").read_bytes() == b"png"
+    assert [m["id"] for m in store.list_runs()] == ["abc_moge_1"]

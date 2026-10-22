@@ -128,6 +128,13 @@ def delete_run(rid: str):
     return {}
 
 
+@app.post("/runs/{rid}/recompute")
+def recompute(rid: str):
+    """Starts a job redoing a run with the current code; its result is the run's (possibly new) id."""
+    _run_or_404(rid)
+    return _job("recompute", lambda progress: store.recompute(rid, progress))
+
+
 @app.get("/runs/{rid}/points.bin")
 def points(rid: str, stride: int | None = None):
     _run_or_404(rid)

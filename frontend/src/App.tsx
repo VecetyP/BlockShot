@@ -488,6 +488,27 @@ export default function App() {
     }
   };
 
+  const recompute = async () => {
+    const targets = selectedRuns;
+    const scenes = targets.filter(api.isScene).length;
+    if (!window.confirm(`Recompute ${targets.length} run${targets.length > 1 ? "s" : ""} with the current version?` +
+      (scenes ? ` Video scenes are redone from their stored frames (about a minute each).` : ""))) return;
+    setError(null);
+    const done: string[] = [];
+    try {
+      for (const [k, r] of targets.entries()) {
+        setRunning(startingJob("recompute"));
+        done.push(await api.recomputeRun(r.id, (j) => setRunning({ ...j, stage: `${k + 1}/${targets.length} · ${r.source ?? r.id} · ${j.stage}` })));
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(null);
+      await refreshRuns();
+      if (done.length) setSelected(done);
+    }
+  };
+
   const toggle = (id: string, on: boolean) =>
     setSelected((s) => (on ? [...s.filter((x) => x !== id), id].slice(-MAX_PANELS) : s.filter((x) => x !== id)));
   const selectedRuns = selected.map((id) => runs.find((r) => r.id === id)).filter((r): r is api.RunMeta => !!r);
@@ -554,7 +575,13 @@ export default function App() {
 
         <header className="history-head">
           <h2>History</h2>
-          <small>Tick up to {MAX_PANELS} to compare</small>
+          {selectedRuns.length > 0 && !running ? (
+            <button className="quiet" onClick={recompute} title="Redo the ticked runs with the current version of BlockShot">
+              Recompute {selectedRuns.length > 1 ? `${selectedRuns.length} runs` : "run"}
+            </button>
+          ) : (
+            <small>Tick up to {MAX_PANELS} to compare</small>
+          )}
         </header>
         <ul className="history">
           {runs.map((r) => (

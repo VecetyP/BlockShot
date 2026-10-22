@@ -54,10 +54,12 @@ def run_id(image_sha: str, model: str, version: str) -> str:
     return f"{image_sha[:16]}_{model}_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
 
 
-def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None, progress=None) -> tuple[str, dict, bool]:
-    """Returns (run_id, meta, cached). `progress(stage)` (optional) is told what's happening."""
+def predict_cached(data: bytes, model: str, force: bool = False, source: str | None = None, progress=None,
+                   sha: str | None = None) -> tuple[str, dict, bool]:
+    """Returns (run_id, meta, cached). `progress(stage)` (optional) is told what's happening. `sha`:
+    the original upload's hash, when `data` is a stored copy (recompute)."""
     say = progress or (lambda *a, **k: None)
-    sha = hashlib.sha256(data).hexdigest()
+    sha = sha or hashlib.sha256(data).hexdigest()
     version = registry.cls(model).version
     rid = run_id(sha, model, version)
     d = RUNS / rid
@@ -130,11 +132,19 @@ def load_arrays(rid: str) -> np.lib.npyio.NpzFile:
 def list_runs() -> list[dict]:
     if not RUNS.exists():
         return []
-    metas = [json.loads(p.read_text()) for p in RUNS.glob("*/meta.json")]
+    metas = [json.loads(p.read_text()) for p in RUNS.glob("*/meta.json") if "." not in p.parent.name]  # not a run being recomputed
     return sorted(metas, key=lambda m: m["created"], reverse=True)
 
 
 MAX_POINTS = 500_000
+
+
+def _forget(rid: str) -> None:
+    """Drops a run from the in-memory caches (call with _build_lock held)."""
+    for k in [k for k in _builds if k[0] == rid]:
+        del _builds[k]
+    _scenes.pop(rid, None)
+    _scene_clouds.pop(rid, None)
 
 
 def delete_run(rid: str) -> None:
@@ -143,11 +153,50 @@ def delete_run(rid: str) -> None:
     if d.parent != RUNS.resolve() or not (d / "meta.json").exists():
         raise FileNotFoundError(rid)
     with _build_lock:  # not while a build of it is being made
-        for k in [k for k in _builds if k[0] == rid]:
-            del _builds[k]
-        _scenes.pop(rid, None)
-        _scene_clouds.pop(rid, None)
+        _forget(rid)
         shutil.rmtree(d)
+
+
+def recompute(rid: str, progress=None) -> str:
+    """Redoes a run with the current code and returns its (possibly new) id. Image runs: the model
+    again on the stored input. Video scenes: everything after frame sampling again on the stored
+    frames (the video itself isn't kept), with the recommended geometry. The old run is moved aside
+    until the new one is saved, so a failure loses nothing."""
+    say = progress or (lambda *a, **k: None)
+    meta = load_meta(rid)
+    old = RUNS / rid
+    aside = RUNS / f"{rid}.recomputing"
+    frames = data = None
+    with _build_lock:
+        _forget(rid)
+        if is_scene(rid):
+            frames = list(load_scene(rid)["rgb"])
+            _scenes.pop(rid, None)
+        else:
+            data = (old / "input.png").read_bytes()
+        old.rename(aside)
+    try:
+        if frames is not None:
+            s = video.Settings(**{**meta.get("settings", {}), "geometry": video.Settings.geometry})
+            new = _scene_id(meta["image_sha256"], s)
+            kept = {k: meta[k] for k in ("video_fps", "frames_read", "duplicates_dropped") if k in meta}
+            say("waiting for the GPU")
+            with _gpu_lock:
+                try:
+                    scene = video.reconstruct_frames(frames, s, {**kept, "frames": len(frames)}, {}, say)
+                finally:
+                    registry.free_cache()
+            say("saving the scene")
+            _save_scene(RUNS / new, new, scene, meta.get("source"), meta["image_sha256"])
+        else:
+            new, _, _ = predict_cached(data, model_of(rid), force=True, source=meta.get("source"), progress=say,
+                                       sha=meta["image_sha256"])
+    except BaseException:
+        if not old.exists():
+            aside.rename(old)
+        raise
+    shutil.rmtree(aside)
+    return new
 
 
 def has_depth(meta: dict) -> bool:
@@ -413,13 +462,18 @@ def is_scene(rid: str) -> bool:
     return (RUNS / rid / SCENE_FILE).exists()
 
 
+def _scene_id(sha: str, s: video.Settings) -> str:
+    """Scenes are cached by video, settings, model versions and pipeline version."""
+    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version + f"p{video.PIPELINE}"
+    return f"{sha[:16]}_scene_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
+
+
 def process_video(data: bytes, filename: str | None, settings: dict, progress=None) -> tuple[str, dict, bool]:
     """Video -> scene run (cached by video + settings). Returns (run id, meta, cached)."""
     say = progress or (lambda *a, **k: None)
     s = video.Settings(**settings)
     sha = hashlib.sha256(data).hexdigest()
-    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version + f"p{video.PIPELINE}"
-    rid = f"{sha[:16]}_scene_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
+    rid = _scene_id(sha, s)
     d = RUNS / rid
     if (d / "meta.json").exists():
         return rid, load_meta(rid), True

@@ -260,11 +260,13 @@ def _onto_shape(fine: np.ndarray, coarse: np.ndarray, ok: np.ndarray) -> np.ndar
 def reconstruct(path: str, s: Settings, progress=_quiet) -> dict:
     """Video file -> scene dict: rgb (F, H, W, 3), depth (F, H, W), mask, K (F, 3, 3), c2w (F, 4, 4),
     hud (H, W) or None, scale_kind, stats."""
-    timings = {}
     t = time.perf_counter()
     frames, stats = sample_frames(path, s, progress)
-    timings["sample"] = time.perf_counter() - t
+    return reconstruct_frames(frames, s, stats, {"sample": time.perf_counter() - t}, progress)
 
+
+def reconstruct_frames(frames: list[np.ndarray], s: Settings, stats: dict, timings: dict, progress=_quiet) -> dict:
+    """Sampled frames -> scene dict (see reconstruct); also how a stored scene is recomputed."""
     t = time.perf_counter()
     hud = hud_mask(frames) if s.hud else None
     stats["hud_fraction"] = round(float(hud.mean()), 4) if hud is not None else 0.0

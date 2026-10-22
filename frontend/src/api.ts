@@ -37,6 +37,9 @@ export const getModels = () => fetch(`${API}/models`).then(json<ModelInfo[]>);
 export const getRuns = () => fetch(`${API}/runs`).then(json<RunMeta[]>);
 export const getRun = (id: string) => fetch(`${API}/runs/${id}`).then(json<RunMeta>);
 export const deleteRun = (id: string) => fetch(`${API}/runs/${id}`, { method: "DELETE" }).then(json<unknown>);
+/** Redoes a run with the current code; resolves with its id (scenes get a new one). */
+export const recomputeRun = (id: string, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/recompute`).then((job) => waitJob<string>(job, onProgress));
 
 /** A background job on the server (backend/jobs.py). total 0 = no measurable progress in this stage. */
 export type JobState = {
