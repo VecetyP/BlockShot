@@ -178,6 +178,8 @@ main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-wid
 .strip-bar strong { font-size: 13px; font-weight: 600; }
 .mc-card {
   flex: none; align-self: stretch; display: flex; flex-direction: column; gap: 6px; width: 260px;
+  position: sticky; left: 0; z-index: 1; /* stays put while the strip's images scroll under it */
+  box-shadow: 10px 0 12px -6px rgb(0 0 0 / 0.5);
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
 }
 .mc-card strong { font-size: 13px; font-weight: 600; }
