@@ -20,6 +20,13 @@ def _run_or_404(rid: str) -> None:
         raise HTTPException(404, f"no run {rid}")
 
 
+def _image_run(rid: str) -> None:
+    """Per-image analysis tools don't apply to video scenes."""
+    _run_or_404(rid)
+    if store.is_scene(rid):
+        raise HTTPException(400, "not available for video scenes")
+
+
 @app.get("/models")
 def models():
     return registry.status()
@@ -65,6 +72,36 @@ def predict(image: UploadFile = File(...), models: list[str] = Form(...), force:
     return _job("predict", work)
 
 
+@app.post("/video")
+def process_video(
+    video: UploadFile = File(...),
+    fps: float = Form(2.0),
+    max_frames: int = Form(60),
+    max_side: int = Form(640),
+    hud: bool = Form(True),
+    geometry: str = Form("moge"),
+):
+    """Starts a job reconstructing one scene from a video; its result is {id, cached, meta}."""
+    if not (0.2 <= fps <= 15 and 2 <= max_frames <= 300 and 256 <= max_side <= 1280 and geometry in ("moge", "vggt")):
+        raise HTTPException(400, "fps 0.2-15, max_frames 2-300, max_side 256-1280, geometry moge|vggt")
+    data, source = video.file.read(), video.filename
+    settings = {"fps": fps, "max_frames": max_frames, "max_side": max_side, "hud": hud, "geometry": geometry}
+
+    def work(progress):
+        rid, meta, cached = store.process_video(data, source, settings, progress)
+        return {"id": rid, "cached": cached, "meta": meta}
+
+    return _job("video", work)
+
+
+@app.get("/runs/{rid}/frames/{i}.jpg")
+def frame_jpg(rid: str, i: int):
+    path = store.RUNS / rid / "frames" / f"{i}.jpg"
+    if not path.is_file():
+        raise HTTPException(404)
+    return Response(path.read_bytes(), media_type="image/jpeg")
+
+
 @app.get("/runs")
 def runs():
     return store.list_runs()
@@ -90,7 +127,7 @@ def input_png(rid: str):
 
 @app.get("/runs/{rid}/maps/{kind}.png")
 def map_png(rid: str, kind: str):
-    _run_or_404(rid)
+    _image_run(rid)
     if kind == "normals":
         n = store.map_array(rid, "normals")
         if n is None:
@@ -120,14 +157,14 @@ def map_png(rid: str, kind: str):
 
 @app.get("/runs/{rid}/analysis")
 def analysis(rid: str, force: bool = False):
-    _run_or_404(rid)
+    _image_run(rid)
     return store.analysis(rid, force)
 
 
 @app.get("/runs/{rid}/field/{kind}.bin")
 def field(rid: str, kind: str, stride: int | None = None):
     """float32 per point, same order as points.bin."""
-    _run_or_404(rid)
+    _image_run(rid)
     b = store.field_bin(rid, kind, stride) if kind in ("curl", "residual") else None
     if b is None:
         raise HTTPException(404, f"no {kind} field for {rid}")
@@ -146,41 +183,41 @@ def _check_minecraft(rid: str, mode: str, value: float) -> None:
 
 
 @app.post("/runs/{rid}/minecraft/build")
-def minecraft_build(rid: str, mode: str = "auto", value: float = 300):
+def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Starts a job that builds the blocks; its result is the build summary."""
     _check_minecraft(rid, mode, value)
-    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress))
+    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame))
 
 
 @app.get("/runs/{rid}/minecraft.json")
-def minecraft_info(rid: str, mode: str = "auto", value: float = 300):
+def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Build summary: dimensions, block count, block size, FOV, pitch, paste offset, tiles."""
     _check_minecraft(rid, mode, value)
-    return store.minecraft_info(rid, mode, value)
+    return store.minecraft_info(rid, mode, value, frame=frame)
 
 
 @app.get("/runs/{rid}/minecraft.bin")
-def minecraft_preview(rid: str, mode: str = "auto", value: float = 300):
+def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     _check_minecraft(rid, mode, value)
-    return Response(store.minecraft_preview_bin(rid, mode, value), media_type="application/octet-stream")
+    return Response(store.minecraft_preview_bin(rid, mode, value, frame), media_type="application/octet-stream")
 
 
 @app.get("/runs/{rid}/minecraft.schem")
-def minecraft_schem(rid: str, mode: str = "auto", value: float = 300):
+def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """One Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
     _check_minecraft(rid, mode, value)
     try:
-        data, filename = store.minecraft_schem(rid, mode, value)
+        data, filename = store.minecraft_schem(rid, mode, value, frame)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/runs/{rid}/minecraft/tiles")
-def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300):
+def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
     """Starts a job writing the build as a zip of tiles; its result is the download URL."""
     _check_minecraft(rid, mode, value)
-    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress)}")
+    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame)}")
 
 
 @app.get("/runs/{rid}/exports/{name}")
@@ -194,7 +231,7 @@ def export_file(rid: str, name: str):
 @app.post("/runs/{rid}/offaxis")
 def offaxis(rid: str):
     """Starts a job; its result is the URLs of the renders."""
-    _run_or_404(rid)
+    _image_run(rid)
     if not store.has_depth(store.load_meta(rid)):
         raise HTTPException(400, "run has no depth to re-render")
     return _job("offaxis", lambda progress: [f"/runs/{rid}/offaxis/{n}" for n in store.offaxis_renders(rid, progress)])

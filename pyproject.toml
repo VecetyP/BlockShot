@@ -16,6 +16,7 @@ dependencies = [
     "diffusers==0.35.2",
     "accelerate==1.15.0",
     "scipy==1.17.1",
+    "opencv-python-headless==5.0.0.93",
 ]
 
 [dependency-groups]

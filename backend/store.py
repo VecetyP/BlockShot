@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ from PIL import Image
 from .analysis import integrability, offaxis
 from .analysis.discontinuity import discontinuity, top_tears
 from .analysis.reproject import reprojection_error
-from . import minecraft
+from . import minecraft, video
 from .models import registry
 from .models.base import Prediction
 
@@ -237,6 +238,10 @@ def points_bin(rid: str, stride: int | None = None) -> bytes:
     """Little-endian: uint32 N, uint32 has_confidence, float32 xyz[N*3], float32 discontinuity[N],
     float32 confidence[N] (only if has_confidence), uint8 rgb[N*3].
     Floats come first so every block stays 4-byte aligned."""
+    if is_scene(rid):
+        xyz, rgb = scene_points(rid)
+        header = np.array([len(xyz), 0], "<u4")
+        return header.tobytes() + xyz.astype("<f4").tobytes() + np.zeros(len(xyz), "<f4").tobytes() + rgb.tobytes()
     a = load_arrays(rid)
     pts, mask = a["points"], a["mask"]
     rgb = np.asarray(Image.open(RUNS / rid / "input.png").convert("RGB"))
@@ -289,24 +294,29 @@ _build_lock = threading.Lock()  # one build at a time, and never the same build 
 MAX_CACHED_BUILDS = 4
 
 
-def minecraft_build(rid: str, mode: str, value: float, progress=None) -> minecraft.Build:
-    key = (rid, mode, float(value))
+def minecraft_build(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> minecraft.Build:
+    """Image runs: viewed from the input camera. Scenes: from frame `frame`'s camera, with "up"
+    averaged over all frames so floors come out level."""
+    key = (rid, mode, float(value), frame)
     if key in _builds:
         return _builds[key]
     with _build_lock:
         if key not in _builds:
             say = progress or (lambda *a, **k: None)
             say("reading points")
-            a = load_arrays(rid)
-            b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say)
+            if is_scene(rid):
+                b = _scene_build(rid, mode, value, frame, say)
+            else:
+                a = load_arrays(rid)
+                b = minecraft.build_from_image(a["points"], _rgb(rid), a["mask"], a["intrinsics"], mode, value, progress=say)
             while len(_builds) >= MAX_CACHED_BUILDS:
                 _builds.pop(next(iter(_builds)))
             _builds[key] = b
     return _builds[key]
 
 
-def minecraft_info(rid: str, mode: str, value: float, progress=None) -> dict:
-    b = minecraft_build(rid, mode, value, progress)
+def minecraft_info(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> dict:
+    b = minecraft_build(rid, mode, value, progress, frame)
     counts = np.bincount(b.block, minlength=len(minecraft.BLOCK_NAMES))
     top = [(minecraft.BLOCK_NAMES[i], int(counts[i])) for i in np.argsort(-counts)[:8] if counts[i]]
     _, _, _, lod = minecraft.preview(b) if len(b.ijk) > minecraft.PREVIEW_MAX else (None, None, None, 1)
@@ -332,32 +342,156 @@ def minecraft_info(rid: str, mode: str, value: float, progress=None) -> dict:
 TILE = 128
 
 
-def minecraft_preview_bin(rid: str, mode: str, value: float) -> bytes:
-    """uint32 N, float32 cube_size, float32 lo[3], int16 ijk[N*3], uint8 rgb[N*3] (block colours).
-    Cube (i, j, k) spans lo + [ijk, ijk+1) * cube_size in Minecraft axes; big builds are previewed
-    with merged cubes (cube_size is then a multiple of the block size)."""
-    b = minecraft_build(rid, mode, value)
+def minecraft_preview_bin(rid: str, mode: str, value: float, frame: int = 0) -> bytes:
+    """uint32 N, float32 cube_size, float32 lo[3], float32 axes[9], float32 origin[3],
+    int16 ijk[N*3], uint8 rgb[N*3] (block colours).
+    Cube (i, j, k) spans lo + [ijk, ijk+1) * cube_size in Minecraft axes; a Minecraft-axes point m is
+    origin + axes @ m in the cloud's coordinates (axes row-major, columns = east, up, south). Big
+    builds are previewed with merged cubes (cube_size is then a multiple of the block size)."""
+    b = minecraft_build(rid, mode, value, frame=frame)
     ijk, rgb, size, _ = minecraft.preview(b)
-    head = np.uint32(len(ijk)).tobytes() + np.array([size, *b.lo], "<f4").tobytes()
+    axes, _ = minecraft._basis(b.pose)
+    head = np.uint32(len(ijk)).tobytes() + np.array([size, *b.lo, *axes.ravel(), *b.pose.position], "<f4").tobytes()
     return head + ijk.astype("<i2").tobytes() + rgb.astype(np.uint8).tobytes()
 
 
-def _export_name(rid: str, mode: str, value: float) -> str:
+def _export_name(rid: str, mode: str, value: float, frame: int = 0) -> str:
     stem = Path(str(load_meta(rid).get("source") or rid)).stem
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)[:40] or "build"
-    return f"{safe}_{model_of(rid)}_{mode}{value:g}".replace(".", "p")
+    view = f"_f{frame}" if is_scene(rid) else ""
+    return f"{safe}_{model_of(rid)}_{mode}{value:g}{view}".replace(".", "p")
 
 
-def minecraft_schem(rid: str, mode: str, value: float) -> tuple[bytes, str]:
-    return minecraft.whole(minecraft_build(rid, mode, value)), _export_name(rid, mode, value) + ".schem"
+def minecraft_schem(rid: str, mode: str, value: float, frame: int = 0) -> tuple[bytes, str]:
+    return minecraft.whole(minecraft_build(rid, mode, value, frame=frame)), _export_name(rid, mode, value, frame) + ".schem"
 
 
-def minecraft_zip(rid: str, mode: str, value: float, progress=None) -> str:
+def minecraft_zip(rid: str, mode: str, value: float, progress=None, frame: int = 0) -> str:
     """Writes the tiles zip into runs/<id>/exports/ and returns its file name."""
-    b = minecraft_build(rid, mode, value, progress)
-    name = _export_name(rid, mode, value) + ".zip"
+    b = minecraft_build(rid, mode, value, progress, frame)
+    name = _export_name(rid, mode, value, frame) + ".zip"
     d = RUNS / rid / "exports"
     d.mkdir(exist_ok=True)
     data = minecraft.tiles_zip(b, name[:-4], TILE, progress or (lambda *a, **k: None))
     _atomic(d / name, lambda f: f.write(data))
     return name
+
+
+# --- video scenes --------------------------------------------------------------------------------
+
+SCENE_FILE = "scene.npz"
+
+
+def is_scene(rid: str) -> bool:
+    return (RUNS / rid / SCENE_FILE).exists()
+
+
+def process_video(data: bytes, filename: str | None, settings: dict, progress=None) -> tuple[str, dict, bool]:
+    """Video -> scene run (cached by video + settings). Returns (run id, meta, cached)."""
+    say = progress or (lambda *a, **k: None)
+    s = video.Settings(**settings)
+    sha = hashlib.sha256(data).hexdigest()
+    version = json.dumps(dataclasses.asdict(s), sort_keys=True) + registry.cls("vggt").version + registry.cls("moge").version
+    rid = f"{sha[:16]}_scene_{hashlib.sha256(version.encode()).hexdigest()[:8]}"
+    d = RUNS / rid
+    if (d / "meta.json").exists():
+        return rid, load_meta(rid), True
+    with tempfile.NamedTemporaryFile(suffix=Path(filename or "video.mp4").suffix or ".mp4", delete=False) as tmp:
+        tmp.write(data)
+    try:
+        say("waiting for the GPU")
+        with _gpu_lock:
+            try:
+                scene = video.reconstruct(tmp.name, s, say)
+            finally:
+                registry.free_cache()
+    finally:
+        os.unlink(tmp.name)
+    say("saving the scene")
+    return rid, _save_scene(d, rid, scene, filename, sha), False
+
+
+def _save_scene(d: Path, rid: str, sc: dict, source: str | None, sha: str) -> dict:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "frames").mkdir(exist_ok=True)
+    rgb = sc["rgb"]
+    for i, f in enumerate(rgb):
+        Image.fromarray(f).save(d / "frames" / f"{i}.jpg", quality=88)
+    Image.fromarray(rgb[0]).save(d / "input.png")  # thumbnail, and the default viewpoint
+    hud = sc["hud"] if sc["hud"] is not None else np.zeros(rgb.shape[1:3], bool)
+    _atomic(d / SCENE_FILE, lambda f: np.savez_compressed(
+        f, rgb=rgb, depth=sc["depth"], mask=sc["mask"], K=sc["K"].astype(np.float32), c2w=sc["c2w"].astype(np.float32), hud=hud))
+    n, h, w = sc["depth"].shape
+    meta = {
+        "id": rid,
+        "kind": "scene",
+        "model": "video scene",
+        "source": source,
+        "image_sha256": sha,
+        "scale_kind": sc["scale_kind"],
+        "height": h,
+        "width": w,
+        "frames": n,
+        "intrinsics": sc["K"][0].tolist(),
+        "cameras": [{"c2w": c.tolist(), "K": k.tolist()} for c, k in zip(sc["c2w"], sc["K"])],
+        "has_confidence": False,
+        "has_normals": False,
+        "depth_source": "video: VGGT poses + " + ("MoGe depth" if sc["scale_kind"] == "metric" else "VGGT depth"),
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        **sc["stats"],
+    }
+    _write_json(d / "meta.json", meta)  # last: marks the scene as complete
+    return meta
+
+
+_scenes: dict = {}  # rid -> loaded arrays (the last couple of scenes)
+
+
+def load_scene(rid: str) -> dict:
+    if rid not in _scenes:
+        with np.load(RUNS / rid / SCENE_FILE) as z:
+            sc = {k: z[k] for k in z.files}
+        while len(_scenes) >= 2:
+            _scenes.pop(next(iter(_scenes)))
+        _scenes[rid] = sc
+    return _scenes[rid]
+
+
+def _scene_grids(sc: dict) -> list:
+    return [(video.world_points(sc["depth"][i], sc["K"][i].astype(np.float64), sc["c2w"][i].astype(np.float64)),
+             sc["rgb"][i], sc["mask"][i], sc["c2w"][i, :3, 3].astype(np.float64)) for i in range(len(sc["depth"]))]
+
+
+_scene_clouds: dict = {}
+
+
+def scene_points(rid: str) -> tuple[np.ndarray, np.ndarray]:
+    """All frames fused into one cloud (scene coordinates = frame 0's camera), averaged on a voxel
+    grid sized to give at most MAX_POINTS points."""
+    if rid not in _scene_clouds:
+        sc = load_scene(rid)
+        P = np.concatenate([g[0][g[2]] for g in _scene_grids(sc)])
+        C = np.concatenate([g[1][g[2]] for g in _scene_grids(sc)])
+        lo, hi = np.percentile(P, 0.5, 0), np.percentile(P, 99.5, 0)
+        keep = ((P >= lo) & (P <= hi)).all(1)
+        P, C = P[keep], C[keep]
+        s = minecraft._size_for_count(lambda s: P, lo, hi, MAX_POINTS * 0.9)
+        dims = minecraft._dims(lo, hi, s)
+        cells, inv = np.unique(minecraft._keys(P, lo, s, dims), return_inverse=True)
+        n = np.bincount(inv)
+        xyz = np.stack([np.bincount(inv, P[:, k]) for k in range(3)], -1) / n[:, None]
+        rgb = np.stack([np.bincount(inv, C[:, k]) for k in range(3)], -1) / n[:, None]
+        while len(_scene_clouds) >= 2:
+            _scene_clouds.pop(next(iter(_scene_clouds)))
+        _scene_clouds[rid] = (xyz.astype(np.float32), rgb.round().astype(np.uint8))
+    return _scene_clouds[rid]
+
+
+def _scene_build(rid: str, mode: str, value: float, frame: int, say) -> minecraft.Build:
+    sc = load_scene(rid)
+    c2w = sc["c2w"].astype(np.float64)
+    frame = int(np.clip(frame, 0, len(c2w) - 1))
+    up = -c2w[:, :3, 1].mean(0)  # cameras' up (-y), averaged: level floors
+    pose = minecraft.Pose(c2w[frame, :3, 3], c2w[frame, :3, 2], up)
+    fov = math.degrees(2 * math.atan(sc["depth"].shape[1] / 2 / float(sc["K"][frame][1, 1])))
+    return minecraft.build_from_grids(_scene_grids(sc), pose, fov, mode, value, progress=say)

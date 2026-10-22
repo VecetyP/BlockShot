@@ -16,7 +16,11 @@ type Props = {
   sync?: OrbitSync;
   nav: NavSettings;
   blocks?: BlockPreview | null; // show the Minecraft build instead of the points
+  frame?: number; // scenes: the frame whose camera Snap goes to
 };
+
+/** The camera Snap goes to: a scene frame's camera, or the input camera (identity) for images. */
+const cameraOf = (meta: RunMeta, frame = 0) => meta.cameras?.[frame] ?? { c2w: null, K: meta.intrinsics };
 
 /**
  * Shares one orbit between viewers. Poses are exchanged in units of each cloud's median depth, so
@@ -71,12 +75,18 @@ function SyncControls({ sync, scale }: { sync: OrbitSync; scale: number }) {
   return null;
 }
 
-/** Depth range of the cloud, used for clip planes and the orbit target. */
+/** Depth range of the cloud, used for clip planes and the orbit target. Scenes have points behind
+ * frame 0's camera too, so distances are |z| and the far plane covers the whole cloud. */
 function zStats(cloud: Cloud) {
   const z = new Float32Array(cloud.n);
-  for (let i = 0; i < cloud.n; i++) z[i] = cloud.xyz[3 * i + 2];
+  let far = 0;
+  for (let i = 0; i < cloud.n; i++) {
+    z[i] = Math.abs(cloud.xyz[3 * i + 2]);
+    far = Math.max(far, Math.abs(cloud.xyz[3 * i]), Math.abs(cloud.xyz[3 * i + 1]), z[i]);
+  }
   z.sort();
-  return { min: z[0] ?? 1, median: z[z.length >> 1] ?? 1, max: z[z.length - 1] ?? 1 };
+  const median = z[z.length >> 1] || 1;
+  return { min: Math.max(z[0] ?? 1, median * 1e-3), median, max: far || 1 };
 }
 
 function Points({ cloud, mode, field, pointSize }: Pick<Props, "cloud" | "mode" | "field" | "pointSize">) {
@@ -120,12 +130,20 @@ function Blocks({ blocks }: { blocks: BlockPreview }) {
     const o = new THREE.Object3D();
     const c = new THREE.Color();
     const s = blocks.size;
+    // Minecraft axes -> cloud (OpenCV) -> three.js (flip y, z). Cubes stay axis-aligned in Minecraft.
+    const [a, o3] = [blocks.axes, blocks.origin];
+    const toThree = new THREE.Matrix4().set(
+      a[0], a[1], a[2], o3[0],
+      -a[3], -a[4], -a[5], -o3[1],
+      -a[6], -a[7], -a[8], -o3[2],
+      0, 0, 0, 1,
+    );
+    o.quaternion.setFromRotationMatrix(toThree);
     for (let i = 0; i < blocks.n; i++) {
-      // Block centre in Minecraft axes, then to three.js: (x, y, z)_mc -> (-x, y, -z).
       const x = blocks.lo[0] + (blocks.ijk[3 * i] + 0.5) * s;
       const y = blocks.lo[1] + (blocks.ijk[3 * i + 1] + 0.5) * s;
       const z = blocks.lo[2] + (blocks.ijk[3 * i + 2] + 0.5) * s;
-      o.position.set(-x, y, -z);
+      o.position.set(x, y, z).applyMatrix4(toThree);
       o.scale.setScalar(s);
       o.updateMatrix();
       m.setMatrixAt(i, o.matrix);
@@ -164,10 +182,10 @@ function TearMarkers({ tears }: { tears: Tear[] }) {
  * canvas_px = (image_px - size/2) * s + canvas/2. Re-applied every frame because R3F resets the
  * projection on resize.
  */
-function IntrinsicsProjection({ meta, near, far }: { meta: RunMeta; near: number; far: number }) {
+function IntrinsicsProjection({ meta, frame, near, far }: { meta: RunMeta; frame?: number; near: number; far: number }) {
   const m = useMemo(() => new THREE.Matrix4(), []);
   useFrame(({ camera, size }) => {
-    const [[fx, , cx], [, fy, cy]] = meta.intrinsics;
+    const [[fx, , cx], [, fy, cy]] = cameraOf(meta, frame).K;
     const { width: W, height: H } = meta;
     const cw = size.width, ch = size.height;
     const s = Math.min(cw / W, ch / H);
@@ -261,32 +279,43 @@ function WasdControls({ speed, scale }: { speed: number; scale: number }) {
   return null;
 }
 
-function Snap({ target, snapKey }: { target: number; snapKey: number }) {
+function Snap({ target, snapKey, meta, frame }: { target: number; snapKey: number; meta: RunMeta; frame?: number }) {
   const { camera, controls } = useThree() as unknown as { camera: THREE.Camera; controls: Controls | null };
+  const c2w = cameraOf(meta, frame).c2w;
   useEffect(() => {
     if (!controls) return;
-    camera.position.set(0, 0, 0);
     camera.up.set(0, 1, 0);
-    controls.target.set(0, 0, -target);
-    controls.update(); // looks from the origin straight down -Z (= +Z in OpenCV): identity rotation
+    if (!c2w) {
+      camera.position.set(0, 0, 0);
+      controls.target.set(0, 0, -target);
+      controls.update(); // looks from the origin straight down -Z (= +Z in OpenCV): identity rotation
+    } else {
+      // OpenCV camera-to-world -> three.js: F R F with F = diag(1, -1, -1) on both sides.
+      const r = (i: number, j: number) => (i === 0 ? 1 : -1) * (j === 0 ? 1 : -1) * c2w[i][j];
+      const R = new THREE.Matrix4().set(r(0, 0), r(0, 1), r(0, 2), 0, r(1, 0), r(1, 1), r(1, 2), 0, r(2, 0), r(2, 1), r(2, 2), 0, 0, 0, 0, 1);
+      camera.position.set(c2w[0][3], -c2w[1][3], -c2w[2][3]);
+      controls.target.copy(new THREE.Vector3(0, 0, -target).applyMatrix4(R).add(camera.position));
+      controls.update(); // aims at the target but drops the camera's roll...
+      camera.quaternion.setFromRotationMatrix(R); // ...so restore the exact orientation
+    }
     controls.dispatchEvent({ type: "change" }); // update() alone doesn't fire when nothing moved
-  }, [camera, controls, target, snapKey]);
+  }, [camera, controls, target, snapKey, c2w]);
   return null;
 }
 
-export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav, blocks }: Props) {
+export default function Viewer({ cloud, meta, mode, field, tears, pointSize, snapKey, sync, nav, blocks, frame }: Props) {
   const z = useMemo(() => zStats(cloud), [cloud]);
   return (
     // linear + flat: colors pass through untouched, so the snapped view reproduces the input pixels.
     <Canvas className="viewer" linear flat gl={{ antialias: false, preserveDrawingBuffer: true }} dpr={1}>
       <color attach="background" args={["#111317"]} />
-      <IntrinsicsProjection meta={meta} near={z.min * 0.01} far={z.max * 100} />
+      <IntrinsicsProjection meta={meta} frame={frame} near={z.min * 0.01} far={z.max * 100} />
       {blocks ? <Blocks blocks={blocks} /> : <Points cloud={cloud} mode={mode} field={field} pointSize={pointSize} />}
       {tears && tears.length > 0 && <TearMarkers tears={tears} />}
       <OrbitControls makeDefault enableDamping={false} rotateSpeed={nav.rotate} zoomSpeed={nav.zoom} panSpeed={nav.pan} />
       <WasdControls speed={nav.move} scale={z.median} />
       {sync && <SyncControls sync={sync} scale={z.median} />}
-      <Snap target={z.median} snapKey={snapKey} />
+      <Snap target={z.median} snapKey={snapKey} meta={meta} frame={frame} />
     </Canvas>
   );
 }

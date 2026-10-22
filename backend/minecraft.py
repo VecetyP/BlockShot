@@ -112,7 +112,8 @@ def point_spacing(p: np.ndarray, sample: int = 50_000) -> float:
     return float(np.median(d[:, 1]))
 
 
-def surface_samples(P: np.ndarray, rgb: np.ndarray, mask: np.ndarray, center: np.ndarray, s: float):
+def surface_samples(P: np.ndarray, rgb: np.ndarray, mask: np.ndarray, center: np.ndarray, s: float,
+                    max_samples: int = MAX_SAMPLES):
     """Points of an image grid (P (H, W, 3), already in Minecraft axes) plus extra samples inside
     every 2x2 pixel cell whose surface patch is bigger than a block, so distant surfaces come out
     solid instead of dotted. Cells spanning a depth tear (a gap between separate surfaces) are not
@@ -125,7 +126,7 @@ def surface_samples(P: np.ndarray, rgb: np.ndarray, mask: np.ndarray, center: np
     ok &= edge <= TEAR * dist
     up = np.where(ok, np.ceil(edge / (0.75 * s)), 1).astype(np.int64)
     max_up = 16
-    while max_up > 1 and (np.minimum(up, max_up) ** 2)[up > 1].sum() > MAX_SAMPLES:
+    while max_up > 1 and (np.minimum(up, max_up) ** 2)[up > 1].sum() > max_samples:
         max_up //= 2
     up = np.minimum(up, max_up)
     ca, cb, cc, cd = (x.astype(np.float32) for x in (rgb[:-1, :-1], rgb[:-1, 1:], rgb[1:, :-1], rgb[1:, 1:]))
@@ -140,7 +141,7 @@ def surface_samples(P: np.ndarray, rgb: np.ndarray, mask: np.ndarray, center: np
         ccols = np.stack([ca[cells], cb[cells], cc[cells], cd[cells]], 1)
         pts.append(np.einsum("sc,ncx->nsx", w, corners).reshape(-1, 3))
         cols.append(np.einsum("sc,ncx->nsx", w, ccols).reshape(-1, 3))
-    return np.concatenate(pts), np.concatenate(cols)
+    return np.concatenate(pts).astype(np.float32), np.concatenate(cols)
 
 
 @dataclass
@@ -244,7 +245,8 @@ def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", valu
     lo, hi = _bounds(np.concatenate([P[m] for P, _, m, _ in grids]))
 
     def samples(s):
-        out = [surface_samples(P, rgb, m, c, s) for P, rgb, m, c in grids]
+        cap = MAX_SAMPLES // len(grids)  # the cap is shared by all frames
+        out = [surface_samples(P, rgb, m, c, s, cap) for P, rgb, m, c in grids]
         return np.concatenate([o[0] for o in out]), np.concatenate([o[1] for o in out])
 
     if mode == "auto":

@@ -48,6 +48,8 @@ function Panel(props: {
   titled: boolean;
   showTears: boolean;
   build?: api.BuildSettings; // when set, show the Minecraft build instead of the points
+  frame: number; // scenes: the frame whose camera Snap goes to and the build is seen from
+  onFrame: (i: number) => void;
 }) {
   const [meta, setMeta] = useState<api.RunMeta | null>(null);
   const [cloud, setCloud] = useState<api.Cloud | null>(null);
@@ -63,9 +65,12 @@ function Panel(props: {
     setAnalysis(null);
     setField(null);
     Promise.all([api.getRun(props.id), api.getCloud(props.id)])
-      .then(([m, c]) => { setMeta(m); setCloud(c); })
+      .then(([m, c]) => {
+        setMeta(m);
+        setCloud(c);
+        if (!api.isScene(m)) api.getAnalysis(props.id).then(setAnalysis).catch(() => {});
+      })
       .catch((e) => setError(String(e)));
-    api.getAnalysis(props.id).then(setAnalysis).catch(() => {});
   }, [props.id]);
 
   const wantsField = FIELD_MODES.includes(props.mode);
@@ -79,13 +84,13 @@ function Panel(props: {
   const shownMode = unavailable || (wantsField && field?.kind !== props.mode) ? "rgb" : props.mode;
   const integ = analysis?.integrability;
   const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
-  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}`;
+  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.frame}`;
   useEffect(() => {
     if (!props.build || !buildable || blocks?.key === blocksKey) return;
-    api.getBlocks(props.id, props.build)
+    api.getBlocks(props.id, props.build, props.frame)
       .then((data) => setBlocks({ key: blocksKey, data }))
       .catch(() => setBlocks({ key: blocksKey, data: null }));
-  }, [props.build, buildable, blocksKey, blocks?.key, props.id]);
+  }, [props.build, buildable, blocksKey, blocks?.key, props.id, props.frame]);
   const shownBlocks = props.build && blocks?.key === blocksKey ? blocks.data : null;
 
   return (
@@ -108,6 +113,11 @@ function Panel(props: {
           {props.titled && <button onClick={() => setLocalSnap((k) => k + 1)}>Snap</button>}
         </div>
       )}
+      {meta && api.isScene(meta) && (
+        <div className="panel-head">
+          <Slider label="View from frame" min={0} max={(meta.frames ?? 1) - 1} step={1} value={props.frame} unit={` / ${(meta.frames ?? 1) - 1}`} onChange={props.onFrame} />
+        </div>
+      )}
       {cloud && meta ? (
         <Viewer
           cloud={cloud}
@@ -120,6 +130,7 @@ function Panel(props: {
           sync={props.sync}
           nav={props.nav}
           blocks={shownBlocks}
+          frame={props.frame}
         />
       ) : (
         <p className="empty">{error ?? "Loading…"}</p>
@@ -200,7 +211,7 @@ function Lightbox({ items, index, onIndex, onClose }: { items: LightboxItem[]; i
 }
 
 /** Download a run's Minecraft build, with what to do in game so it lines up with the image. */
-function MinecraftCard({ run, settings }: { run: api.RunMeta; settings: api.BuildSettings }) {
+function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: api.BuildSettings; frame: number }) {
   const [info, setInfo] = useState<api.MinecraftInfo | null>(null);
   const [building, setBuilding] = useState<api.JobState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -212,15 +223,15 @@ function MinecraftCard({ run, settings }: { run: api.RunMeta; settings: api.Buil
     setError(null);
     setZipUrl(null);
     setBuilding(startingJob("minecraft"));
-    api.buildMinecraft(run.id, settings, (j) => live && setBuilding(j))
+    api.buildMinecraft(run.id, settings, frame, (j) => live && setBuilding(j))
       .then((i) => live && setInfo(i))
       .catch((e) => live && setError(String(e)))
       .finally(() => live && setBuilding(null));
     return () => { live = false; };
-  }, [run.id, settings.mode, settings.value]);
+  }, [run.id, settings.mode, settings.value, frame]);
   const exportZip = () => {
     setExporting(startingJob("tiles"));
-    api.exportTiles(run.id, settings, setExporting)
+    api.exportTiles(run.id, settings, frame, setExporting)
       .then(setZipUrl)
       .catch((e) => setError(String(e)))
       .finally(() => setExporting(null));
@@ -239,7 +250,7 @@ function MinecraftCard({ run, settings }: { run: api.RunMeta; settings: api.Buil
       {info.too_tall && <small className="warn">Taller than Minecraft's 384-block build height: the top or bottom will be cut off.</small>}
       {info.preview_lod > 1 && <small>3D preview merges {info.preview_lod}³ blocks per cube; downloads are full detail.</small>}
       {info.tiles <= 1 && info.single_file ? (
-        <a className="button primary" href={api.schemUrl(run.id, settings)} download>Download .schem</a>
+        <a className="button primary" href={api.schemUrl(run.id, settings, frame)} download>Download .schem</a>
       ) : exporting ? (
         <ProgressBar job={exporting} />
       ) : zipUrl ? (
@@ -251,7 +262,7 @@ function MinecraftCard({ run, settings }: { run: api.RunMeta; settings: api.Buil
         <summary>How to line it up in game (1.20+)</summary>
         <ol>
           <li>Put the {info.tiles > 1 ? "tiles" : "file"} in <code>.minecraft/config/worldedit/schematics/</code> (WorldEdit mod) or the server's <code>plugins/WorldEdit/schematics/</code>.</li>
-          <li>Stand where the picture was taken from, facing south: <code>/tp @s ~ ~ ~ 0 {pitch}</code></li>
+          <li>Stand where {api.isScene(run) ? `frame ${frame} was filmed` : "the picture was taken"} from, facing south: <code>/tp @s ~ ~ ~ 0 {pitch}</code></li>
           <li>
             <code>//schem load &lt;name&gt;</code>, then <code>//paste</code>
             {info.tiles > 1 ? " for every tile, without moving in between (the zip has the list)." : "."} The picture's camera lands at your eyes.
@@ -299,6 +310,29 @@ function BuildControls({ value, onChange }: { value: api.BuildSettings; onChange
       {draft.mode === "meters" && slider("1 block =", 0.05, 2, 0.05, `${draft.value.toFixed(2)} m`, draft.value, (v) => setDraft({ mode: "meters", value: v }))}
       {draft.mode === "fit" && slider("Longest side", 32, 1024, 32, `${draft.value} blocks`, draft.value, (v) => setDraft({ mode: "fit", value: v }))}
     </>
+  );
+}
+
+/** A video scene's sampled frames: click one to view the scene (and the build) from it. */
+function SceneStrip({ run, build, frame, onFrame }: { run: api.RunMeta; build: api.BuildSettings; frame: number; onFrame: (i: number) => void }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const items: LightboxItem[] = Array.from({ length: run.frames ?? 0 }, (_, i) => ({
+    src: api.frameUrl(run.id, i),
+    caption: `${run.source ?? "video"} · frame ${i}`,
+  }));
+  return (
+    <div className="strip">
+      {items.map((it, i) => (
+        <figure key={it.src} className={`tile ${i === frame ? "current" : ""}`}>
+          <button className="thumb" onClick={() => onFrame(i)} onDoubleClick={() => setOpen(i)} aria-label={`View from frame ${i}`} title="Click: view from here · double-click: enlarge">
+            <img src={it.src} alt="" loading="lazy" />
+          </button>
+          <figcaption>{i}</figcaption>
+        </figure>
+      ))}
+      <MinecraftCard run={run} settings={build} frame={frame} />
+      {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
+    </div>
   );
 }
 
@@ -365,7 +399,7 @@ function Strip({ run, showTears, build }: { run: api.RunMeta; showTears: boolean
           <button className="offaxis" onClick={renderOffAxis}>Off-axis renders</button>
         )
       )}
-      {hasDepth && <MinecraftCard run={run} settings={build} />}
+      {hasDepth && <MinecraftCard run={run} settings={build} frame={0} />}
       {open !== null && <Lightbox items={items} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -386,6 +420,10 @@ export default function App() {
   const [showTears, setShowTears] = useState(false);
   const [build, setBuild] = useState<api.BuildSettings>({ mode: "auto", value: 300 });
   const [showBlocks, setShowBlocks] = useState(false);
+  const [frames, setFrames] = useState<Record<string, number>>({}); // scene id -> frame viewed from
+  const frameOf = (id: string) => frames[id] ?? 0;
+  const setFrame = (id: string) => (i: number) => setFrames((f) => ({ ...f, [id]: i }));
+  const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "moge" });
   const [nav, setNavState] = useState<NavSettings>(loadNav);
   const setNav = (patch: Partial<NavSettings>) =>
     setNavState((n) => {
@@ -409,11 +447,18 @@ export default function App() {
     refreshRuns();
   }, [refreshRuns]);
 
+  const isVideo = !!file && (file.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi)$/i.test(file.name));
   const run = async () => {
-    if (!file || !picked.length) return;
-    setRunning(startingJob("predict"));
+    if (!file || (!isVideo && !picked.length)) return;
+    setRunning(startingJob(isVideo ? "video" : "predict"));
     setError(null);
     try {
+      if (isVideo) {
+        const scene = await api.processVideo(file, video, setRunning);
+        await refreshRuns();
+        setSelected([scene.id]);
+        return;
+      }
       const out = await api.predict(file, picked, setRunning);
       await refreshRuns();
       setSelected(out.slice(0, MAX_PANELS).map((r) => r.id));
@@ -439,11 +484,30 @@ export default function App() {
           onDrop={(e) => { e.preventDefault(); setFile(e.dataTransfer.files[0] ?? null); }}
         >
           <label>
-            <input type="file" accept="image/*" className="visually-hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <input type="file" accept="image/*,video/*" className="visually-hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             <Icon d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
-            <span>{file ? file.name : "Drop an image, or click to choose"}</span>
+            <span>{file ? file.name : "Drop an image or a video, or click to choose"}</span>
           </label>
         </section>
+        {isVideo ? (
+          <fieldset className="models video-opts">
+            <legend>Video → scene</legend>
+            <Slider label="Frames/s" min={0.5} max={6} step={0.5} value={video.fps} unit="" onChange={(fps) => setVideo((v) => ({ ...v, fps }))} />
+            <Slider label="Max frames" min={8} max={200} step={4} value={video.max_frames} unit="" onChange={(max_frames) => setVideo((v) => ({ ...v, max_frames }))} />
+            <label className="slider">
+              <span>Geometry</span>
+              <select value={video.geometry} onChange={(e) => setVideo((v) => ({ ...v, geometry: e.target.value as api.VideoSettings["geometry"] }))}>
+                <option value="moge">MoGe depth (best, metres)</option>
+                <option value="vggt">VGGT depth (faster)</option>
+              </select>
+            </label>
+            <label>
+              <input type="checkbox" checked={video.hud} onChange={(e) => setVideo((v) => ({ ...v, hud: e.target.checked }))} />
+              <span>Ignore a static game HUD</span>
+            </label>
+            <small>Move slowly and keep things in view between frames. Each frame takes about a second.</small>
+          </fieldset>
+        ) : (
         <fieldset className="models">
           <legend>Models</legend>
           {models.map((m) => (
@@ -461,10 +525,11 @@ export default function App() {
             </label>
           ))}
         </fieldset>
+        )}
         {running ? (
           <ProgressBar job={running} />
         ) : (
-          <button className="primary" disabled={!file || !picked.length} onClick={run}>Run</button>
+          <button className="primary" disabled={!file || (!isVideo && !picked.length)} onClick={run}>Run</button>
         )}
         {error && <p className="error">{error}</p>}
 
@@ -485,7 +550,9 @@ export default function App() {
                 <img src={api.inputUrl(r.id)} alt="" loading="lazy" decoding="async" />
                 <span>
                   <span className="name" title={r.source ?? r.id}>{r.source ?? r.id}</span>
-                  <small>{modelLabel(r)} · {r.created.replace("T", " ")}</small>
+                  <small>
+                    {api.isScene(r) ? <span className="badge">video · {r.frames} frames</span> : modelLabel(r)} · {r.created.replace("T", " ")}
+                  </small>
                 </span>
               </button>
             </li>
@@ -547,6 +614,8 @@ export default function App() {
                 nav={nav}
                 titled={selected.length > 1}
                 showTears={showTears}
+                frame={frameOf(id)}
+                onFrame={setFrame(id)}
               />
             ))
           ) : (
@@ -565,7 +634,13 @@ export default function App() {
                 Show as blocks
               </label>
             </div>
-            {selectedRuns.map((r) => <Strip key={r.id} run={r} showTears={showTears} build={build} />)}
+            {selectedRuns.map((r) =>
+              api.isScene(r) ? (
+                <SceneStrip key={r.id} run={r} build={build} frame={frameOf(r.id)} onFrame={setFrame(r.id)} />
+              ) : (
+                <Strip key={r.id} run={r} showTears={showTears} build={build} />
+              ),
+            )}
           </div>
         )}
       </main>

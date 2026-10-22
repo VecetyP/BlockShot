@@ -163,6 +163,7 @@ main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-wid
 .thumb:hover:not(:disabled) { border-color: var(--accent); background: var(--panel); }
 .thumb:hover img { transform: scale(1.03); }
 .tile figcaption { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.tile.current .thumb { border-color: var(--accent); }
 .tear {
   position: absolute; transform: translate(-50%, -50%); min-width: 16px; height: 16px; padding: 0 3px;
   border-radius: 8px; background: #ff2bd6; color: #fff; font: 600 10px/16px system-ui; text-align: center;

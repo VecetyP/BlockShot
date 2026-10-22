@@ -47,6 +47,35 @@ class VGGT:
         K[0] *= w / MODEL_RES  # model-res pixels -> input-res pixels
         K[1] *= h / mh
         mask = depth > 0
+        return self._prediction(depth, conf_raw, mask, K, elapsed, w, h, mh)
+
+    @torch.inference_mode()
+    def predict_frames(self, frames: list[np.ndarray]) -> dict:
+        """Several frames of one scene in a single pass, so poses and depth share one frame of
+        reference: the first frame's camera. All frames must have the same size. Returns, at frame
+        resolution: extrinsics (S, 3, 4) camera-from-world, intrinsics (S, 3, 3), depth (S, H, W)
+        and depth_conf (S, H, W) (>= 1)."""
+        h, w = frames[0].shape[:2]
+        mh = max(14, round(MODEL_RES * h / w / 14) * 14)
+        x = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).float().div(255).to(self.device)
+        x = F.interpolate(x, size=(mh, MODEL_RES), mode="bilinear", align_corners=False, antialias=True)
+        with torch.autocast(self.device, dtype=self.dtype, enabled=self.dtype != torch.float32):
+            out = self.model(x)
+        E, K = pose_encoding_to_extri_intri(out["pose_enc"].float(), (mh, MODEL_RES))
+        size = dict(size=(h, w), mode="bilinear", align_corners=False)
+        depth = F.interpolate(out["depth"][0, ..., 0].float()[:, None], **size)[:, 0]
+        conf = F.interpolate(out["depth_conf"][0].float()[:, None], **size)[:, 0]
+        K = K[0].cpu().numpy().astype(np.float64)
+        K[:, 0] *= w / MODEL_RES  # model-res pixels -> frame pixels
+        K[:, 1] *= h / mh
+        return {
+            "extrinsics": E[0].cpu().numpy().astype(np.float64),
+            "intrinsics": K,
+            "depth": depth.cpu().numpy().astype(np.float32),
+            "depth_conf": conf.cpu().numpy().astype(np.float32),
+        }
+
+    def _prediction(self, depth, conf_raw, mask, K, elapsed, w, h, mh) -> Prediction:
         return Prediction(
             points=unproject(depth.astype(np.float32), K),
             depth=depth.astype(np.float32),

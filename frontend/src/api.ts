@@ -12,8 +12,13 @@ export type RunMeta = {
   intrinsics: number[][];
   has_confidence: boolean;
   created: string;
+  kind?: "scene"; // a video scene: points fused from many frames, in frame 0's camera coordinates
+  frames?: number;
+  cameras?: { c2w: number[][]; K: number[][] }[]; // per frame, OpenCV axes
   [k: string]: unknown;
 };
+
+export const isScene = (r: RunMeta) => r.kind === "scene";
 
 export type Cloud = {
   n: number;
@@ -87,6 +92,17 @@ export async function getCloud(id: string): Promise<Cloud> {
   return { n, xyz, discontinuity, confidence, rgb: new Uint8Array(buf, off, n * 3) };
 }
 
+export type VideoSettings = { fps: number; max_frames: number; hud: boolean; geometry: "moge" | "vggt" };
+
+/** Reconstructs one scene from a video (cached by video + settings). */
+export const processVideo = (file: File, s: VideoSettings, onProgress?: OnProgress) => {
+  const fd = new FormData();
+  fd.append("video", file);
+  Object.entries(s).forEach(([k, v]) => fd.append(k, String(v)));
+  return startJob(`${API}/video`, { body: fd }).then((id) => waitJob<{ id: string; cached: boolean; meta: RunMeta }>(id, onProgress));
+};
+
+export const frameUrl = (id: string, i: number) => `${API}/runs/${id}/frames/${i}.jpg`;
 export const mapUrl = (id: string, kind: string) => `${API}/runs/${id}/maps/${kind}.png`;
 export const inputUrl = (id: string) => `${API}/runs/${id}/input.png`;
 
@@ -133,25 +149,31 @@ export type MinecraftInfo = {
   data_version: number;
   top_blocks: [string, number][];
 };
-const q = (b: BuildSettings) => `mode=${b.mode}&value=${b.value}`;
-export type BlockPreview = { n: number; size: number; lo: Float32Array; ijk: Int16Array; rgb: Uint8Array };
+// `frame`: for scenes, the frame whose camera is the standing spot.
+const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}`;
+/** axes: row-major 3x3, columns = Minecraft east, up, south in cloud coordinates; origin: the eye. */
+export type BlockPreview = { n: number; size: number; lo: Float32Array; axes: Float32Array; origin: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 
 /** Builds the blocks in a background job (cached on the server); resolves with the summary. */
-export const buildMinecraft = (id: string, b: BuildSettings, onProgress?: OnProgress) =>
-  startJob(`${API}/runs/${id}/minecraft/build?${q(b)}`).then((job) => waitJob<MinecraftInfo>(job, onProgress));
+export const buildMinecraft = (id: string, b: BuildSettings, frame: number, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/minecraft/build?${q(b, frame)}`).then((job) => waitJob<MinecraftInfo>(job, onProgress));
 
 /** Writes the build as a zip of tiles; resolves with its download URL. */
-export const exportTiles = (id: string, b: BuildSettings, onProgress?: OnProgress) =>
-  startJob(`${API}/runs/${id}/minecraft/tiles?${q(b)}`).then((job) => waitJob<string>(job, onProgress)).then((u) => API + u);
+export const exportTiles = (id: string, b: BuildSettings, frame: number, onProgress?: OnProgress) =>
+  startJob(`${API}/runs/${id}/minecraft/tiles?${q(b, frame)}`).then((job) => waitJob<string>(job, onProgress)).then((u) => API + u);
 
 // Layout documented in backend/store.py:minecraft_preview_bin.
-export async function getBlocks(id: string, b: BuildSettings): Promise<BlockPreview> {
-  const r = await fetch(`${API}/runs/${id}/minecraft.bin?${q(b)}`);
+export async function getBlocks(id: string, b: BuildSettings, frame: number): Promise<BlockPreview> {
+  const r = await fetch(`${API}/runs/${id}/minecraft.bin?${q(b, frame)}`);
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const buf = await r.arrayBuffer();
   const n = new Uint32Array(buf, 0, 1)[0];
-  const f = new Float32Array(buf, 4, 4);
-  return { n, size: f[0], lo: f.slice(1), ijk: new Int16Array(buf, 20, n * 3), rgb: new Uint8Array(buf, 20 + n * 6, n * 3) };
+  const f = new Float32Array(buf, 4, 16);
+  const head = 4 + 16 * 4;
+  return {
+    n, size: f[0], lo: f.slice(1, 4), axes: f.slice(4, 13), origin: f.slice(13, 16),
+    ijk: new Int16Array(buf, head, n * 3), rgb: new Uint8Array(buf, head + n * 6, n * 3),
+  };
 }
 
-export const schemUrl = (id: string, b: BuildSettings) => `${API}/runs/${id}/minecraft.schem?${q(b)}`;
+export const schemUrl = (id: string, b: BuildSettings, frame: number) => `${API}/runs/${id}/minecraft.schem?${q(b, frame)}`;
