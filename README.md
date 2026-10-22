@@ -54,7 +54,10 @@ Model weights download from Hugging Face on first use.
    blocks** to preview, and press **Snap to input camera** to see it from where it matches.
 3. Press **Download .schem** on the run's card. Big builds come as a zip of 128 × 128 tiles.
 
-![A photo, its point cloud from the camera, and from 30° to the side](docs/photo-waterfall.jpg)
+![A photo, its point cloud from 30° to the side, and its Minecraft build from the same spot](docs/photo-waterfall.jpg)
+
+*Left: the photo. Middle: its point cloud, seen from 30° to the side. Right: the Minecraft build, from
+the same spot.*
 
 <img src="docs/orbit.gif" width="560" alt="The tower's point cloud swinging away from the camera and back">
 
@@ -131,7 +134,7 @@ The backend is FastAPI (`backend/`), the web app Vite + React + three.js (`front
 
 ```bash
 uv run pytest                                                 # model tests download weights on first run
-uv run python tools/readme_media.py triptych <run> <out.jpg>  # README pictures: triptych, orbit, walk
+uv run python tools/readme_media.py build <run> <out.jpg>     # README pictures: triptych, build, orbit, walk
 uv run python tools/minecraft_palette.py <minecraft.jar>      # re-measure the block palette
 ```
 

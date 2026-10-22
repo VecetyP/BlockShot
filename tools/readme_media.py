@@ -1,6 +1,7 @@
 """Render the README's pictures from runs: point clouds splatted with a z-buffer, no GPU needed.
 
     uv run python tools/readme_media.py triptych <image run> <out.jpg>    input | cloud from the camera | cloud from 30° off
+    uv run python tools/readme_media.py build <image run> <out.jpg>       input | cloud from 30° off | its Minecraft build from 30° off
     uv run python tools/readme_media.py orbit <image run> <out.gif>       the cloud swinging away from the camera and back
     uv run python tools/readme_media.py walk <scene run> <out.gif>        a walk along the scene's camera path
 """
@@ -8,10 +9,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend import store, video  # noqa: E402
+from backend import minecraft, store, video  # noqa: E402
 
 BG = (11, 12, 15)
 WIDTH = 900  # px per triptych panel
@@ -93,6 +94,61 @@ def triptych(rid: str, out: str) -> None:
     print(f"{out}: {fig.size[0]}x{fig.size[1]}")
 
 
+# (axis, side, shade): Minecraft lights tops fully, north/south faces at 0.8, east/west at 0.6.
+FACES = [(1, 1, 1.0), (1, 0, 0.5), (2, 0, 0.8), (2, 1, 0.8), (0, 0, 0.6), (0, 1, 0.6)]
+
+
+def blocks(b: minecraft.Build, K: np.ndarray, w2c: np.ndarray, hw: tuple[int, int]) -> Image.Image:
+    """A build's exposed block faces (Minecraft face shading, far to near) seen by camera w2c, in
+    the cloud's camera frame like `splat`."""
+    h, w = hw
+    B, _ = minecraft._basis(b.pose)  # columns: Minecraft x, y, z in cloud coordinates
+    occupied = {tuple(p) for p in b.ijk}
+    rgb = minecraft.BLOCK_RGB[b.block].astype(float)
+    polys = []
+    for axis, side, shade in FACES:
+        step = np.zeros(3, int)
+        step[axis] = 1 if side else -1
+        exposed = np.array([tuple(p + step) not in occupied for p in b.ijk])
+        a, c = [i for i in range(3) if i != axis]
+        quad = np.zeros((4, 3))
+        quad[:, axis] = side
+        quad[:, a], quad[:, c] = [0, 1, 1, 0], [0, 0, 1, 1]
+        mc = (b.ijk[exposed, None, :] + quad[None]) * b.block_size + b.lo
+        cam = (mc.reshape(-1, 3) @ B.T + b.pose.position) @ w2c[:3, :3].T + w2c[:3, 3]
+        cam = cam.reshape(-1, 4, 3)
+        n = np.zeros(3)
+        n[axis] = 1 if side else -1
+        facing = (cam.mean(1) @ (w2c[:3, :3] @ B @ n)) < 0  # outward normal points back at the camera
+        z = cam[..., 2]
+        ok = (z > 1e-6).all(1) & facing
+        uv = cam[..., :2] / z[..., None] * [K[0, 0], K[1, 1]] + [K[0, 2], K[1, 2]]
+        polys += zip(z[ok].mean(1), uv[ok], rgb[exposed][ok] * shade)
+    img = Image.new("RGB", (w, h), BG)
+    draw = ImageDraw.Draw(img)
+    for _, q, col in sorted(polys, key=lambda p: -p[0]):
+        draw.polygon([tuple(v) for v in q], fill=tuple(int(x) for x in col))
+    return img
+
+
+def build(rid: str, out: str, deg: float = 30, kblocks: int = 300) -> None:
+    rgb, P, C, size, K, up = image_cloud(rid)
+    a = store.load_arrays(rid)
+    b = minecraft.build_from_image(a["points"], rgb, a["mask"], a["intrinsics"], "auto", kblocks, up=up)
+    h, w = rgb.shape[:2]
+    s = WIDTH / w
+    Ko = K * np.array([[s], [s], [1]])
+    hw = (round(h * s), WIDTH)
+    view = orbit_view(P, up, deg)
+    panels = [Image.fromarray(rgb).resize(hw[::-1], Image.LANCZOS), splat(P, C, size, Ko, view, hw), blocks(b, Ko, view, hw)]
+    gap = 12
+    fig = Image.new("RGB", (WIDTH * 3 + gap * 2, hw[0]), BG)
+    for i, p in enumerate(panels):
+        fig.paste(p, (i * (WIDTH + gap), 0))
+    fig.save(out, quality=86)
+    print(f"{out}: {fig.size[0]}x{fig.size[1]}, {len(b.ijk):,} blocks")
+
+
 def _save_gif(frames: list[Image.Image], out: str, ms: int, colors: int = 128) -> None:
     pal = frames[len(frames) // 2].quantize(colors=colors, method=Image.Quantize.MEDIANCUT)
     q = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
@@ -145,4 +201,4 @@ def walk(rid: str, out: str, steps: int = 2, stride: int = 3) -> None:
 
 
 if __name__ == "__main__":
-    {"triptych": triptych, "orbit": orbit, "walk": walk}[sys.argv[1]](*sys.argv[2:4])
+    {"triptych": triptych, "build": build, "orbit": orbit, "walk": walk}[sys.argv[1]](*sys.argv[2:4])
