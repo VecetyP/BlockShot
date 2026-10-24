@@ -9,6 +9,17 @@ In the **Minecraft build** bar under the 3D view, choose how big a block is:
   city and a room both get a few hundred thousand blocks.
 - **Real size**: one block = *x* metres. Metric models (MoGe, video scenes) only.
 - **Fit longest side**: the longest side is *N* blocks.
+- **Character size**: the camera's height above the floor becomes a player's eye height (1.62
+  blocks), times a size factor. A building ten people long comes out ten players long, whatever the
+  model thinks a metre is: a game's character (a Roblox R6 eye is about 4.5 studs, so 1 block ≈ 2.8
+  studs) or a person filming. Needs the floor in view now and then.
+
+**Shape**: *As seen* (default) places blocks only where surfaces were seen. *Boxes (buildings)* turns
+the grid to run along the walls and rebuilds every building as a hollow prism from the ground to its
+roof, so hidden back walls exist too ([backend/boxify.py](../backend/boxify.py)). Shell blocks take
+the colour of the nearest seen block (windows, signs); things on roofs narrower than 5 blocks and
+everything outside buildings stay as seen. Gaps between buildings are never bridged. Slanted roofs
+and spires come out stepped.
 
 A budget of 4M blocks enlarges the blocks, with a warning, if a setting would go past it. **Show as
 blocks** previews the build in 3D; previews above 400k blocks merge blocks into bigger cubes, and
