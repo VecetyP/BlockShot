@@ -5,13 +5,13 @@ import time
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-from . import jobs, minecraft, store  # noqa: E402
+from . import jobs, minecraft, store, world  # noqa: E402
 from .models import registry  # noqa: E402
 
 app = FastAPI(title="BlockShot")
@@ -245,7 +245,7 @@ def field(rid: str, kind: str, stride: int | None = None):
     return Response(b, media_type="application/octet-stream")
 
 
-def _check_minecraft(rid: str, mode: str, value: float) -> None:
+def _check_minecraft(rid: str, mode: str, value: float, shape: str = "voxels") -> None:
     _run_or_404(rid)
     if not store.has_depth(store.load_meta(rid)):
         raise HTTPException(400, "this model has no depth to build from")
@@ -254,44 +254,46 @@ def _check_minecraft(rid: str, mode: str, value: float) -> None:
     lo, hi = minecraft.MODES[mode]
     if not lo <= value <= hi:
         raise HTTPException(400, f"value for {mode} must be {lo}..{hi}")
+    if shape not in minecraft.SHAPES:
+        raise HTTPException(400, f"shape must be one of {list(minecraft.SHAPES)}")
 
 
 @app.post("/runs/{rid}/minecraft/build")
-def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_build(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, shape: str = "voxels"):
     """Starts a job that builds the blocks; its result is the build summary."""
-    _check_minecraft(rid, mode, value)
-    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame))
+    _check_minecraft(rid, mode, value, shape)
+    return _job("minecraft", lambda progress: store.minecraft_info(rid, mode, value, progress, frame, shape))
 
 
 @app.get("/runs/{rid}/minecraft.json")
-def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_info(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, shape: str = "voxels"):
     """Build summary: dimensions, block count, block size, FOV, pitch, paste offset, tiles."""
-    _check_minecraft(rid, mode, value)
-    return store.minecraft_info(rid, mode, value, frame=frame)
+    _check_minecraft(rid, mode, value, shape)
+    return store.minecraft_info(rid, mode, value, frame=frame, shape=shape)
 
 
 @app.get("/runs/{rid}/minecraft.bin")
-def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
-    _check_minecraft(rid, mode, value)
-    return Response(store.minecraft_preview_bin(rid, mode, value, frame), media_type="application/octet-stream")
+def minecraft_preview(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, shape: str = "voxels"):
+    _check_minecraft(rid, mode, value, shape)
+    return Response(store.minecraft_preview_bin(rid, mode, value, frame, shape), media_type="application/octet-stream")
 
 
 @app.get("/runs/{rid}/minecraft.schem")
-def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_schem(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, shape: str = "voxels"):
     """One Sponge v2 schematic for WorldEdit; //paste puts the input camera at your eyes."""
-    _check_minecraft(rid, mode, value)
+    _check_minecraft(rid, mode, value, shape)
     try:
-        data, filename = store.minecraft_schem(rid, mode, value, frame)
+        data, filename = store.minecraft_schem(rid, mode, value, frame, shape)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/runs/{rid}/minecraft/tiles")
-def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0):
+def minecraft_tiles(rid: str, mode: str = "auto", value: float = 300, frame: int = 0, shape: str = "voxels"):
     """Starts a job writing the build as a zip of tiles; its result is the download URL."""
-    _check_minecraft(rid, mode, value)
-    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame)}")
+    _check_minecraft(rid, mode, value, shape)
+    return _job("tiles", lambda progress: f"/runs/{rid}/exports/{store.minecraft_zip(rid, mode, value, progress, frame, shape)}")
 
 
 @app.get("/runs/{rid}/exports/{name}")
@@ -317,3 +319,89 @@ def offaxis_png(rid: str, name: str):
     if not path.is_relative_to(store.RUNS.resolve()) or path.parent.name != "offaxis" or not path.is_file():
         raise HTTPException(404)
     return Response(path.read_bytes(), media_type="image/png")
+
+
+# --- Worlds: several scenes in one map (world.py) ----------------------------------------------
+
+def _world(name: str) -> dict:
+    try:
+        return world.load(name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+def _session(name: str, i: int) -> dict:
+    w = _world(name)
+    if not 0 <= i < len(w["sessions"]):
+        raise HTTPException(404, f"no scene {i} in world {name}")
+    return w
+
+
+@app.get("/worlds")
+def worlds():
+    return world.list_worlds()
+
+
+@app.get("/worlds/{name}")
+def world_get(name: str):
+    return _world(name)
+
+
+@app.post("/worlds/{name}/scenes")
+def world_add(name: str, scene: str):
+    """Starts a job adding a video scene with a proposed placement; its result is the world."""
+    _world(name)
+    _run_or_404(scene)
+    if not store.is_scene(scene):
+        raise HTTPException(400, "only video scenes can be added to a world")
+    return _job("world", lambda progress: world.add_scene(name, scene, progress))
+
+
+@app.post("/worlds/{name}/video")
+def world_video(name: str, video: UploadFile = File(...), piece_s: float = Form(world.PIECE_S), fps: float = Form(world.PIECE_FPS),
+                fov_deg: float | None = Form(None)):
+    """Starts a job cutting a long recording into short pieces, each a scene placed after the one
+    before; its result is the world."""
+    _world(name)
+    if not (1 <= piece_s <= 10 and 2 <= fps <= 15) or (fov_deg is not None and not 20 <= fov_deg <= 150):
+        raise HTTPException(400, "piece_s 1-10, fps 2-15, fov_deg 20-150")
+    data, source = video.file.read(), video.filename
+    return _job("world video", lambda progress: world.add_video(name, data, source, piece_s, fps, fov_deg, progress))
+
+
+@app.patch("/worlds/{name}/scenes/{i}")
+def world_update(name: str, i: int, changes: dict = Body(...)):
+    """Changes a scene's turns / scale / offset / confirmed."""
+    _session(name, i)
+    return world.update(name, i, **changes)
+
+
+@app.delete("/worlds/{name}/scenes/{i}")
+def world_remove(name: str, i: int):
+    _session(name, i)
+    return world.remove(name, i)
+
+
+@app.post("/worlds/{name}/map")
+def world_map(name: str):
+    """Starts a job; its result is each scene's top-down cells for the map view."""
+    _world(name)
+    return _job("world map", lambda progress: world.top_view(name))
+
+
+@app.post("/worlds/{name}/tiles")
+def world_tiles(name: str, shape: str = "voxels"):
+    """Starts a job writing the world as a zip of tiles; its result is the download URL."""
+    _world(name)
+    if shape not in minecraft.SHAPES:
+        raise HTTPException(400, f"shape must be one of {list(minecraft.SHAPES)}")
+    return _job("world tiles", lambda progress: f"/worlds/{name}/exports/{world.export(name, shape, progress)}")
+
+
+@app.get("/worlds/{name}/exports/{fname}")
+def world_export(name: str, fname: str):
+    d = (world.WORLDS / name / "exports").resolve()
+    path = (d / fname).resolve()
+    if not d.is_relative_to(world.WORLDS.resolve()) or not path.is_relative_to(d) or not path.is_file():
+        raise HTTPException(404)
+    return Response(path.read_bytes(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fname}"'})

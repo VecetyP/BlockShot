@@ -17,12 +17,17 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
+from . import boxify
+
 DATA_VERSION = 3465  # Minecraft 1.20.1: the palette was measured from 1.20 blocks
 WORLD_HEIGHT = 384  # 1.18+: y = -64 .. 319
 EYE = np.array([0.5, 1.62, 0.5])  # player eye position inside the block the player stands in
 OUTLIER_PCT = 0.5  # % of points ignored at each end of each axis (stray points)
-# mode -> allowed value range. auto: target thousands of blocks; meters: block size; fit: longest side.
-MODES = {"auto": (20, 8000), "meters": (0.01, 10.0), "fit": (16, 4096)}
+# mode -> allowed value range. auto: target thousands of blocks; meters: block size; fit: longest side;
+# eye: the camera's height above the floor becomes a player's eye height, times `value`.
+MODES = {"auto": (20, 8000), "meters": (0.01, 10.0), "fit": (16, 4096), "eye": (0.1, 10.0)}
+SHAPES = ("voxels", "boxes")  # boxes: buildings as solid prisms on a grid along their walls (boxify)
+EYE_CONE = 60.0  # degrees around straight down in which the floor is looked for
 DEFAULT_BUDGET = 4_000_000  # blocks; past this the block size grows until the build fits
 TEAR = 0.05  # neighbouring pixels further apart than 5% of their distance are separate surfaces
 SIZING_SAMPLES = 4_000_000  # per sizing pass, so "auto" doesn't fill the surface several times over
@@ -129,19 +134,12 @@ def _axis_share(N: np.ndarray, D: np.ndarray, tol: float = 3.0) -> np.ndarray:
     return ((d > math.cos(math.radians(tol))) | (d < math.sin(math.radians(tol)))).mean(0)
 
 
-def find_up(N: np.ndarray, prior: np.ndarray, max_angle: float = 30.0) -> tuple[np.ndarray, float]:
-    """Gravity "up" from surface normals. Built things are square: floors, roofs and tables face up,
-    walls face sideways along two directions. Find those three axes (the direction most normals are
-    parallel or perpendicular to, then the main wall direction around it) and take the axis nearest
-    `prior`, if it's within max_angle of it; otherwise keep `prior`. Returns (up, share of normals
-    lined up with it).
-
-    The walls carry the signal when level surfaces are few: on a Roblox city seen 40 degrees from
-    above, averaging level surfaces put "up" 20 degrees off; this finds the direction that makes 23%
-    of surfaces exactly vertical instead of 5%. Within half a degree of the truth on a synthetic room."""
-    prior = prior / np.linalg.norm(prior)
+def find_axes(N: np.ndarray) -> np.ndarray | None:
+    """The three square-to-each-other axes of built things (floors/roofs and the two wall
+    directions) from surface normals N: the direction most normals are parallel or perpendicular
+    to, then the main wall direction around it. Rows of a (3, 3) array; None if too few normals."""
     if len(N) < 100:
-        return prior, 0.0
+        return None
     N = N[np.random.default_rng(0).choice(len(N), min(len(N), 20000), replace=False)]
     D = _half_sphere(2.0)
     a = D[np.argmax(_axis_share(N, D))]
@@ -157,12 +155,41 @@ def find_up(N: np.ndarray, prior: np.ndarray, max_angle: float = 30.0) -> tuple[
     E = np.cos(turns)[:, None] * u + np.sin(turns)[:, None] * np.cross(a, u)
     side = N[np.abs(N @ a) < math.sin(math.radians(9))]
     b = E[np.argmax((np.abs(side @ E.T) > math.cos(math.radians(3))).mean(0))] if len(side) > 50 else u
-    axes = np.stack([a, b, np.cross(a, b)])
+    return np.stack([a, b, np.cross(a, b)])
+
+
+def find_up(N: np.ndarray, prior: np.ndarray, max_angle: float = 30.0) -> tuple[np.ndarray, float]:
+    """Gravity "up" from surface normals. Built things are square: floors, roofs and tables face up,
+    walls face sideways along two directions. Find those three axes (find_axes) and take the axis
+    nearest `prior`, if it's within max_angle of it; otherwise keep `prior`. Returns (up, share of
+    normals lined up with it).
+
+    The walls carry the signal when level surfaces are few: on a Roblox city seen 40 degrees from
+    above, averaging level surfaces put "up" 20 degrees off; this finds the direction that makes 23%
+    of surfaces exactly vertical instead of 5%. Within half a degree of the truth on a synthetic room."""
+    prior = prior / np.linalg.norm(prior)
+    axes = find_axes(N)
+    if axes is None:
+        return prior, 0.0
     k = int(np.argmax(np.abs(axes @ prior)))
     up = axes[k] * np.sign(axes[k] @ prior)
     if up @ prior < math.cos(math.radians(max_angle)):
         return prior, 0.0
     return up, float(_axis_share(N, up[None])[0])
+
+
+def wall_facing(N: np.ndarray, up: np.ndarray, forward: np.ndarray) -> np.ndarray:
+    """The wall direction (from find_axes) nearest `forward`, made level: a grid facing it has
+    walls along its block rows. `forward` itself if no wall direction is found."""
+    up = up / np.linalg.norm(up)
+    axes = find_axes(N)
+    if axes is not None:
+        axes = axes - (axes @ up)[:, None] * up  # level, and the axis nearest "up" shrinks away
+        axes = axes[np.argsort(-np.linalg.norm(axes, axis=1))[:2]]
+        axes /= np.linalg.norm(axes, axis=1, keepdims=True)
+        k = int(np.argmax(np.abs(axes @ forward)))
+        forward = axes[k] * (np.sign(axes[k] @ forward) or 1.0)
+    return forward
 
 
 def rotation_between(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -319,8 +346,34 @@ def _size_for_count(samples_at, lo, hi, target: float, progress=_quiet) -> float
     return s
 
 
+def eye_height(grids) -> float:
+    """The camera's height above the floor it stands on (grids in Minecraft axes, y up). A level
+    floor is the same drop below the camera wherever it is seen, so drops of points inside a cone
+    around straight down pile up at each level below; per frame, the nearest level that holds at
+    least a third as many points as the biggest one is the floor (looking over a roof's edge, the
+    street below can outnumber the roof); the median over frames."""
+    t = math.tan(math.radians(EYE_CONE))
+    hs = []
+    for P, _, m, c in grids:
+        d = P[m] - c
+        drop = -d[:, 1]
+        drop = drop[(drop > 0) & (np.hypot(d[:, 0], d[:, 2]) < t * drop)]
+        if len(drop) < 200:
+            continue
+        n, edges = np.histogram(drop, bins=np.arange(0, 3 * np.median(drop), 0.02 * np.median(drop)))
+        sm = np.convolve(n, [1, 1, 1], "same")  # a level split across two bins still counts whole
+        peak = (sm >= sm.max() / 3) & (sm >= np.roll(sm, 1)) & (sm >= np.roll(sm, -1))
+        k = int(np.argmax(peak))
+        k = max(k - 1, 0) + int(np.argmax(n[max(k - 1, 0):k + 2]))  # the fullest bin of that level
+        hs.append(edges[k] + 0.01 * np.median(drop))
+    if not hs:
+        raise ValueError("eye size needs the floor in view: look down at it now and then while recording")
+    return float(np.median(hs))
+
+
 def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", value: float = 300,
-                     budget: int = DEFAULT_BUDGET, progress=_quiet, clear: bool = True) -> Build:
+                     budget: int = DEFAULT_BUDGET, progress=_quiet, clear: bool = True,
+                     shape: str = "voxels") -> Build:
     """Block build from one or more image grids [(points (H, W, 3), rgb (H, W, 3), mask, camera
     centre)], all in the same cloud frame, viewed from `pose`. Surfaces between pixels are filled.
 
@@ -328,9 +381,18 @@ def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", valu
       "auto"   - about `value` thousand blocks: detail follows how much surface the scene has, so a
                  wide scene doesn't get spread thin;
       "meters" - one block = `value` cloud units (metres for metric models);
-      "fit"    - longest side of `value` blocks.
-    If a build would exceed `budget` blocks, blocks grow until it fits."""
+      "fit"    - longest side of `value` blocks;
+      "eye"    - character-sized: the camera's height above the floor becomes a player's eye
+                 height (1.62 blocks), times `value`.
+    If a build would exceed `budget` blocks, blocks grow until it fits.
+
+    shape "boxes": the grid is turned to run along the walls and buildings become solid prisms
+    (boxify); the result is then seen from `pose` again (view_from)."""
     progress("placing points")
+    view = pose
+    if shape == "boxes":
+        N = np.concatenate([grid_normals(P.astype(np.float64), m & np.isfinite(P).all(-1)) for P, _, m, _ in grids])
+        pose = Pose(pose.position, wall_facing(N, pose.up, pose.forward), pose.up)
     B, _ = _basis(pose)
     grids = [((P - pose.position) @ B, rgb, mask & np.isfinite(P).all(-1), (c - pose.position) @ B)
              for P, rgb, mask, c in grids]
@@ -347,11 +409,19 @@ def build_from_grids(grids, pose: Pose, fov_deg: float, mode: str = "auto", valu
 
     if mode == "auto":  # sizing only counts occupied cells, so a sparser fill is close enough
         s = _size_for_count(lambda s: samples(s, SIZING_SAMPLES, "sizing blocks")[0], lo, hi, value * 1000, progress)
+    elif mode == "eye":
+        s = eye_height(grids) / (EYE[1] * value)
     else:
         s = float(value) if mode == "meters" else float((hi - lo).max()) / value
     progress("filling surfaces")
     p, rgb = samples(s, stage="filling surfaces")
-    return _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, target=value * 1000 if mode == "auto" else None, clear=clear)
+    b = _finish(p, rgb, lo, hi, s, pose, fov_deg, budget, progress, target=value * 1000 if mode == "auto" else None, clear=clear)
+    if shape == "boxes":
+        progress("making boxes")
+        ijk, block = boxify.boxes(b.ijk, b.block, b.dims)
+        b = replace(b, ijk=ijk, block=block)
+        b = view_from(b, view, fov_deg) if clear else b  # scenes: the caller places the viewer
+    return b
 
 
 def view_from(b: Build, pose: Pose, fov_deg: float) -> Build:
@@ -382,14 +452,14 @@ def image_up(points: np.ndarray, mask: np.ndarray, above: bool = False) -> np.nd
 
 
 def build_from_image(points, rgb, mask, K, mode="auto", value=300, budget=DEFAULT_BUDGET, progress=_quiet,
-                     up: np.ndarray | None = None) -> Build:
+                     up: np.ndarray | None = None, shape: str = "voxels") -> Build:
     """A single-image run: points (H, W, 3) in its camera frame, viewer at that camera, `up` from
     image_up (computed here if not given)."""
     m = mask & (points[..., 2] > 0)
     fov = math.degrees(2 * math.atan(mask.shape[0] / 2 / float(K[1, 1])))
     P = points.astype(np.float64)
     pose = Pose(np.zeros(3), np.array([0.0, 0.0, 1.0]), image_up(points, mask) if up is None else np.asarray(up, float))
-    return build_from_grids([(P, rgb, m, np.zeros(3))], pose, fov, mode, value, budget, progress)
+    return build_from_grids([(P, rgb, m, np.zeros(3))], pose, fov, mode, value, budget, progress, shape=shape)
 
 
 def preview(b: Build, max_cubes: int = PREVIEW_MAX) -> tuple[np.ndarray, np.ndarray, float, int]:

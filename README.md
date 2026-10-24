@@ -86,6 +86,12 @@ Move slowly, with each moment overlapping the last. For game footage, hide the H
 game's **Vertical FOV** if you know it. Options, recording tips and how it works:
 [docs/video.md](docs/video.md).
 
+## Worlds
+
+Record a big place over several sessions and join the videos into one map on the **World** tab: each
+new scene is placed where its roofs match, then you confirm or nudge it. With **Boxes** shape,
+buildings become solid prisms. See [docs/world.md](docs/world.md).
+
 ## Playground
 
 Switch the sidebar to **Playground** for a small first-person world: presets or your own blocks,

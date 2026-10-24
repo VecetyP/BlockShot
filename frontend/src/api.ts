@@ -172,8 +172,9 @@ export const renderOffAxis = (id: string, onProgress?: OnProgress) =>
     .then((u) => u.map((x) => API + x));
 
 /** How blocks are sized. auto: about `value` thousand blocks; meters: one block = value m; fit: longest side. */
-export type BuildMode = "auto" | "meters" | "fit";
-export type BuildSettings = { mode: BuildMode; value: number };
+export type BuildMode = "auto" | "meters" | "fit" | "eye";
+// shape "boxes": buildings become solid prisms on a grid along their walls (backend/boxify.py).
+export type BuildSettings = { mode: BuildMode; value: number; shape?: "voxels" | "boxes" };
 export type MinecraftInfo = {
   dims: [number, number, number]; // width (x), height (y), length (z) in blocks
   blocks: number;
@@ -192,7 +193,7 @@ export type MinecraftInfo = {
   top_blocks: [string, number][];
 };
 // `frame`: for scenes, the frame whose camera is the standing spot.
-const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}`;
+const q = (b: BuildSettings, frame = 0) => `mode=${b.mode}&value=${b.value}&frame=${frame}${b.shape === "boxes" ? "&shape=boxes" : ""}`;
 /** axes: row-major 3x3, columns = Minecraft east, up, south in cloud coordinates; origin: the eye. */
 export type BlockPreview = { n: number; size: number; lo: Float32Array; axes: Float32Array; origin: Float32Array; ijk: Int16Array; rgb: Uint8Array };
 
@@ -220,3 +221,39 @@ export async function getBlocks(id: string, b: BuildSettings, frame: number, sig
 }
 
 export const schemUrl = (id: string, b: BuildSettings, frame: number) => `${API}/runs/${id}/minecraft.schem?${q(b, frame)}`;
+
+// --- Worlds: several scenes placed into one map (backend/world.py) ---
+export type WorldScene = {
+  scene: string;
+  turns: number; // quarter turns about "up"
+  yaw?: number; // degrees more about "up" (placed from feature matches)
+  scale: number; // blocks per scene unit
+  offset: [number, number, number]; // blocks
+  confirmed: boolean;
+  score: number | null; // how well the proposed placement matched (correlation of roof heights)
+  eye_scale: boolean; // scale came from the camera's height above the floor
+  fov_deg: number;
+  ghosts?: number; // pieces of a recording: share of points its frames disagreed on
+};
+export type World = { name: string; sessions: WorldScene[] };
+/** Per scene: top-down cells [x, z, height] in blocks at `scale`, before its turn and offset. */
+export type WorldMap = { scale: number; cell: number; cells: [number, number, number][] }[];
+
+const W = (name: string) => `${API}/worlds/${encodeURIComponent(name)}`;
+export const getWorlds = () => fetch(`${API}/worlds`).then(json<string[]>);
+export const getWorld = (name: string) => fetch(W(name)).then(json<World>);
+export const addWorldScene = (name: string, scene: string, onProgress?: OnProgress) =>
+  startJob(`${W(name)}/scenes?scene=${encodeURIComponent(scene)}`).then((j) => waitJob<World>(j, onProgress));
+/** A long recording cut into short pieces, each placed after the one before; resolves with the world. */
+export const addWorldVideo = (name: string, file: File, onProgress?: OnProgress) => {
+  const form = new FormData();
+  form.append("video", file);
+  return startJob(`${W(name)}/video`, { body: form }).then((j) => waitJob<World>(j, onProgress));
+};
+export const updateWorldScene = (name: string, i: number, changes: Partial<WorldScene>) =>
+  fetch(`${W(name)}/scenes/${i}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then(json<World>);
+export const removeWorldScene = (name: string, i: number) => fetch(`${W(name)}/scenes/${i}`, { method: "DELETE" }).then(json<World>);
+export const getWorldMap = (name: string, onProgress?: OnProgress) =>
+  startJob(`${W(name)}/map`).then((j) => waitJob<WorldMap>(j, onProgress));
+export const exportWorld = (name: string, shape: "voxels" | "boxes", onProgress?: OnProgress) =>
+  startJob(`${W(name)}/tiles?shape=${shape}`).then((j) => waitJob<string>(j, onProgress)).then((u) => API + u);

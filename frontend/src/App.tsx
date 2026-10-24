@@ -6,6 +6,7 @@ import Playground, {
   type AutopilotKind, type Material, type Nuisances, type PgScene, type Shape, type Tool, type Truth,
 } from "./Playground";
 import Viewer, { OrbitSync, type NavSettings } from "./Viewer";
+import World from "./World";
 
 const MAX_PANELS = 4;
 const RECOMMENDED_MODEL = "moge"; // the best-looking builds in practice; listed first and picked by default
@@ -103,7 +104,7 @@ function Panel(props: {
       ].filter(Boolean).join(" · ")
     : "";
   const buildable = !!meta && !String(meta.depth_source ?? "").startsWith("none");
-  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.frame}`;
+  const blocksKey = `${props.id}:${props.build?.mode}:${props.build?.value}:${props.build?.shape}:${props.frame}`;
   useEffect(() => {
     if (!props.build || !buildable || blocks?.key === blocksKey) return;
     const abort = new AbortController();
@@ -279,7 +280,7 @@ function MinecraftCard({ run, settings, frame }: { run: api.RunMeta; settings: a
       .catch((e) => live() && setError(String(e)))
       .finally(() => live() && setBuilding(null));
     return () => abort.abort();
-  }, [run.id, run.above, settings.mode, settings.value, frame]);
+  }, [run.id, run.above, settings.mode, settings.value, settings.shape, frame]);
   const exportZip = () => {
     setExporting(startingJob("tiles"));
     api.exportTiles(run.id, settings, frame, setExporting)
@@ -451,17 +452,26 @@ function BuildControls({ value, onChange }: { value: api.BuildSettings; onChange
           value={value.mode}
           onChange={(e) => {
             const mode = e.target.value as api.BuildMode;
-            onChange({ mode, value: { auto: 300, meters: 0.25, fit: 128 }[mode] });
+            onChange({ ...value, mode, value: { auto: 300, meters: 0.25, fit: 128, eye: 1 }[mode] });
           }}
         >
           <option value="auto">Auto (by block count)</option>
           <option value="meters">Real size</option>
           <option value="fit">Fit longest side</option>
+          <option value="eye">Character size (from camera height)</option>
+        </select>
+      </label>
+      <label className="slider" title="Boxes: buildings become solid prisms along their walls (hidden sides filled); things on roofs stay as they are.">
+        <span>Shape</span>
+        <select value={value.shape ?? "voxels"} onChange={(e) => onChange({ ...value, shape: e.target.value as "voxels" | "boxes" })}>
+          <option value="voxels">As seen</option>
+          <option value="boxes">Boxes (buildings)</option>
         </select>
       </label>
       {draft.mode === "auto" && slider("About", 0, AUTO_STEPS.length - 1, 1, `${AUTO_STEPS[idx] >= 1000 ? `${AUTO_STEPS[idx] / 1000}M` : `${AUTO_STEPS[idx]}k`} blocks`, idx, (i) => setDraft({ ...draft, value: AUTO_STEPS[i] }))}
       {draft.mode === "meters" && slider("1 block =", 0.05, 2, 0.05, `${draft.value.toFixed(2)} m`, draft.value, (v) => setDraft({ ...draft, value: v }))}
       {draft.mode === "fit" && slider("Longest side", 32, 1024, 32, `${draft.value} blocks`, draft.value, (v) => setDraft({ ...draft, value: v }))}
+      {draft.mode === "eye" && slider("Size", 0.25, 4, 0.05, `${draft.value.toFixed(2)}× life size`, draft.value, (v) => setDraft({ ...draft, value: v }))}
     </>
   );
 }
@@ -667,7 +677,7 @@ export default function App() {
   }, []);
   const [video, setVideo] = useState<api.VideoSettings>({ fps: 2, max_frames: 60, hud: true, geometry: "vggt" });
   // Playground (see Playground.tsx): its scene is kept in this browser.
-  const [appMode, setAppMode] = useState<"upload" | "playground">("upload");
+  const [appMode, setAppMode] = useState<"upload" | "playground" | "world">("upload");
   const [pgScene, setPgSceneState] = useState<PgScene>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PG_KEY) ?? "null");
@@ -812,9 +822,9 @@ export default function App() {
       <aside className="sidebar">
         <h1 className="brand">BlockShot</h1>
         <div className="segmented mode-switch" role="tablist" aria-label="Mode">
-          {(["upload", "playground"] as const).map((m) => (
+          {(["upload", "playground", "world"] as const).map((m) => (
             <button key={m} role="tab" aria-selected={appMode === m} className={appMode === m ? "active" : ""} onClick={() => setAppMode(m)}>
-              {m === "upload" ? "Upload" : "Playground"}
+              {{ upload: "Upload", playground: "Playground", world: "World" }[m]}
             </button>
           ))}
         </div>
@@ -824,6 +834,11 @@ export default function App() {
             onAutopilot={(kind) => setAutopilot((a) => ({ kind, n: (a?.n ?? 0) + 1 }))} recordingBusy={!!running}
             video={pgVideo} onVideo={setPgVideo} models={models} picked={picked} onPicked={setPicked}
           />
+        ) : appMode === "world" ? (
+          <small className="note">
+            Put several video scenes into one map. Record each new video starting somewhere already in the
+            world, so its roofs can be matched; upload it on the Upload tab, then add it here.
+          </small>
         ) : (
         <>
         <section
@@ -911,7 +926,7 @@ export default function App() {
         </ul>
       </aside>
 
-      <main className={appMode === "playground" ? "pg-mode" : undefined}>
+      <main className={appMode !== "upload" ? "pg-mode" : undefined}>
         {stale && (
           <p className="banner" role="status">
             BlockShot was updated while it was running. Close both BlockShot windows and run <code>run.bat</code> again to use the new version.
@@ -922,6 +937,8 @@ export default function App() {
             scene={pgScene} onScene={setPgScene} tool={tool} onTool={setTool} nuisances={nuisances}
             autopilot={autopilot} onAutopilotDone={() => {}} onClip={sendClip} onSnapshot={sendSnapshot}
           />
+        ) : appMode === "world" ? (
+          <World scenes={runs.filter(api.isScene)} />
         ) : (
         <>
         <div className="toolbar">

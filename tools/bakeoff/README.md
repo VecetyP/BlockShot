@@ -67,3 +67,21 @@ Notes:
   `map-anything-apache` is Apache 2.0.
 - **Outputs:** frames, scores (`out/<model>.json`) and renders go to `out/`. The venv, the cloned code and
   `out/` are gitignored.
+
+## Calm game footage: COLMAP cameras + MoGe depth (2026-10-24/25)
+
+The scripts below are the path measured in [docs/game-maps-research.md](../../docs/game-maps-research.md)
+(Test4/Test5, Parkour Legacy at a fixed 120 FOV setting = 114° vertical). Run COLMAP steps in the
+bake-off venv (`pycolmap`), the rest with the app's (`uv run python`).
+
+| Step | Script |
+|---|---|
+| Frames at 4 fps + COLMAP with the camera fixed at a known vertical FOV | `sfm.py <clip> <out dir> 4 114` |
+| COLMAP model as text | `pycolmap.Reconstruction(...).write_text(<out dir>/text)` |
+| Dense depth per frame (MoGe told the FOV; MapAnything / DA3 given COLMAP's cameras) | `dense_moge.py`, `dense_mapanything.py`, `dense_da3.py` |
+| Depth vs COLMAP's well-triangulated points | `score_anchors.py` (also `align_dense.py`, `score_dense.py`) |
+| Fit depth per frame to COLMAP's points; cut-based fusion as a scene run | `fuse_scene.py` |
+| TSDF averaging and its scores | `tsdf_fuse.py` |
+| Build at character scale (+ the walked floor), render | `build_cloud.py` |
+| Split a model that breaks into consistent pieces, add them to a World | `split_world.py` |
+| Place those pieces from shared feature matches | `place_pieces.py`, after matching the `cross_pairs.txt` that `split_world.py` writes: `pycolmap.match_image_pairs(db, pairing_options=ImportedPairingOptions(match_list_path=...))` |

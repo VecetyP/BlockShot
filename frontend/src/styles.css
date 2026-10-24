@@ -320,7 +320,7 @@ a.button.primary:hover { background: #74b7ff; }
 @media (prefers-reduced-motion: reduce) { .progress-fill { animation: none; } }
 
 /* Mode switch and the playground */
-.mode-switch { display: grid; grid-template-columns: 1fr 1fr; }
+.mode-switch { display: grid; grid-template-columns: repeat(3, 1fr); }
 .mode-switch button { text-align: center; }
 main.pg-mode, main.pg-mode:not(:has(> .banner)) { grid-template-rows: minmax(0, 1fr); }
 main.pg-mode:has(> .banner) { grid-template-rows: auto minmax(0, 1fr); }
@@ -369,3 +369,18 @@ main.pg-mode:has(> .banner) { grid-template-rows: auto minmax(0, 1fr); }
   main.pg-mode, main.pg-mode:not(:has(> .banner)) { grid-template-rows: 70vh; }
   main.pg-mode:has(> .banner) { grid-template-rows: auto 70vh; }
 }
+
+/* World (World.tsx): map on the left, its scenes on the right */
+.world { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; min-width: 0; }
+.world .toolbar { flex-wrap: wrap; }
+.world-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
+.world-map { flex: 1; min-width: 0; min-height: 320px; border-radius: 8px; background: var(--panel, #111); cursor: grab; touch-action: none; }
+.world-side { width: 280px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.world-scenes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.world-scenes button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.world-scenes li.active button { outline: 2px solid currentColor; }
+.world-edit .row, .world-export { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+@media (max-width: 800px) { .world-body { flex-direction: column; } .world-side { width: auto; } }
+.world-scenes .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+label.button { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 11px; cursor: pointer; }
+label.button:hover { background: var(--panel-hover); border-color: var(--line-strong); }

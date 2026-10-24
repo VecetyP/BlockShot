@@ -222,3 +222,24 @@ def test_seen_from_above_builds_a_top_down_picture_flat():
     assert b.pitch_deg > 80  # looking down at it
     side = mc.build_from_image(pts, rgb, mask, K, "meters", 0.5)
     assert side.dims[1] > 30  # without the option it stands up like a wall
+
+
+def test_eye_height_is_the_floor_drop_not_nearer_clutter():
+    # Floor 2.0 below the camera seen ahead and below, plus a railing post 0.5 below the eye.
+    rng = np.random.default_rng(0)
+    xz = rng.uniform(-3, 3, (5000, 2))
+    floor = np.stack([xz[:, 0], np.full(5000, -2.0), xz[:, 1]], 1)
+    post = np.stack([np.full(300, 0.3), rng.uniform(-2.0, -0.5, 300), np.full(300, 0.3)], 1)
+    P = np.concatenate([floor, post])[None]
+    grid = (P, np.zeros(P.shape, np.uint8), np.ones(P.shape[:2], bool), np.zeros(3))
+    assert abs(mc.eye_height([grid]) - 2.0) < 0.05
+
+
+def test_eye_height_takes_the_roof_not_the_bigger_street_below():
+    # Standing 1.5 above a roof, looking over its edge: the street 20 below fills more of the view.
+    rng = np.random.default_rng(1)
+    roof = np.c_[rng.uniform(-1, 1, 3000), np.full(3000, -1.5), rng.uniform(-1, 1, 3000)]
+    street = np.c_[rng.uniform(-15, 15, 9000), np.full(9000, -20.0), rng.uniform(-15, 15, 9000)]
+    P = np.concatenate([roof, street])[None]
+    grid = (P, np.zeros(P.shape, np.uint8), np.ones(P.shape[:2], bool), np.zeros(3))
+    assert abs(mc.eye_height([grid]) - 1.5) < 0.2
