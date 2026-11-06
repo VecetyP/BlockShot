@@ -8,4 +8,3 @@ dist/
 tools/bakeoff/.venv/
 tools/bakeoff/vendor/
 tools/bakeoff/out/
-worlds/
